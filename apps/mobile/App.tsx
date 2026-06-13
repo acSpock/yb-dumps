@@ -27,6 +27,7 @@ import {
 } from 'react-native';
 
 import { buildRankingResult, createProjectFromPickedAssets, createSampleProject } from './src/data/sampleProject';
+import { rankTripPhotos } from './src/services/analysisApi';
 import {
   API_BASE_URL,
   disconnectInstagram,
@@ -46,6 +47,7 @@ import {
   InstagramConnectionState,
   InstagramPublishResult,
   RankedPick,
+  RankingResult,
   TripPhoto,
   TripProject,
 } from './src/types';
@@ -69,6 +71,7 @@ const disconnectedInstagram: InstagramConnectionState = {
 
 const analysisSteps = [
   { label: 'Preparing the trip dump', detail: 'Reading selected photos and creating analysis records.' },
+  { label: 'Calling the ranker', detail: 'Sending photo metadata to the server-side curation engine.' },
   { label: 'Ranking the strongest 50', detail: 'Scoring quality, moments, people, place, and variety.' },
   { label: 'Composing carousel options', detail: 'Building finished edits with single-photo and multi-photo slides.' },
   { label: 'Checking feed preview', detail: 'Finding the photo that fits a warm, low-contrast grid.' },
@@ -103,6 +106,34 @@ function queryParamValue(
 function isInstagramCallbackUrl(url: string) {
   const parsed = Linking.parse(url);
   return parsed.path === 'instagram-callback' || url.includes('/instagram-callback');
+}
+
+function completedJobForResult(project: TripProject, result: RankingResult) {
+  const now = new Date().toISOString();
+
+  return {
+    ...project.job,
+    completedAt: result.generatedAt,
+    progress: 1,
+    resultId: result.resultId,
+    stage: 'complete' as const,
+    startedAt: project.job.startedAt ?? now,
+    status: 'succeeded' as const,
+    updatedAt: result.generatedAt,
+  };
+}
+
+function runningJobForProject(project: TripProject) {
+  const now = new Date().toISOString();
+
+  return {
+    ...project.job,
+    progress: 0.1,
+    stage: 'ingest' as const,
+    startedAt: now,
+    status: 'running' as const,
+    updatedAt: now,
+  };
 }
 
 async function readLocalSecret(key: string) {
@@ -413,37 +444,66 @@ export default function App() {
       return;
     }
 
+    let canceled = false;
     setAnalysisStep(0);
+    setWorkflowMessage(null);
 
     const timers = analysisSteps.map((_, index) =>
       setTimeout(() => {
-        setAnalysisStep(index);
+        if (!canceled) {
+          setAnalysisStep(index);
+        }
       }, index * 720),
     );
 
     const completionTimer = setTimeout(() => {
-      const completedProject = {
-        ...project,
-        result: buildRankingResult(project.projectId, project.photos),
-        updatedAt: new Date().toISOString(),
-        savedAt: project.savedAt ?? new Date().toISOString(),
-      };
-      const firstVariationId = completedProject.result.carouselVariations[0]?.variationId ?? null;
+      void (async () => {
+        let result: RankingResult;
+        let completionMessage = 'Server analysis complete. Carousel options were generated from the backend ranker.';
 
-      setProject(completedProject);
-      setSelectedVariationId((currentId) => currentId ?? firstVariationId);
-      setActiveTab('carousel');
-      setScreen('results');
-      void saveProjectSnapshot(
-        {
-          ...completedProject,
-          chosenCarouselVariationId: completedProject.chosenCarouselVariationId ?? firstVariationId ?? undefined,
-        },
-        false,
-      );
+        try {
+          result = await rankTripPhotos({
+            feedImport: project.feedImport,
+            jobId: project.job.jobId,
+            photos: project.photos,
+            projectId: project.projectId,
+          });
+        } catch (error) {
+          result = buildRankingResult(project.projectId, project.photos);
+          completionMessage = apiErrorMessage(error, 'Server analysis failed. Used local fallback ranking instead.');
+        }
+
+        if (canceled) {
+          return;
+        }
+
+        const completedProject = {
+          ...project,
+          job: completedJobForResult(project, result),
+          result,
+          savedAt: project.savedAt ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        const firstVariationId = completedProject.result.carouselVariations[0]?.variationId ?? null;
+
+        setProject(completedProject);
+        setSelectedVariationId((currentId) => currentId ?? firstVariationId);
+        setActiveTab('carousel');
+        setScreen('results');
+        setWorkflowMessage(completionMessage);
+        void saveProjectSnapshot(
+          {
+            ...completedProject,
+            chosenCarouselVariationId: completedProject.chosenCarouselVariationId ?? firstVariationId ?? undefined,
+          },
+          false,
+          completionMessage,
+        );
+      })();
     }, analysisSteps.length * 720 + 450);
 
     return () => {
+      canceled = true;
       timers.forEach(clearTimeout);
       clearTimeout(completionTimer);
     };
@@ -995,7 +1055,12 @@ export default function App() {
 
   function startAnalysis() {
     const nextProject = project ?? createSampleProject();
-    setProject(nextProject);
+    setProject({
+      ...nextProject,
+      job: runningJobForProject(nextProject),
+      updatedAt: new Date().toISOString(),
+    });
+    setWorkflowMessage('Starting server-side analysis...');
     setScreen('analyzing');
   }
 

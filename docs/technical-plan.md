@@ -55,6 +55,13 @@ Current prototype dependencies:
 - `expo-crypto`
 - `react-native-web` for browser smoke testing
 
+Current analysis flow:
+
+- `apps/mobile/src/services/analysisApi.ts` calls `POST /analysis/rank` on `EXPO_PUBLIC_API_BASE_URL`.
+- Mobile sends photo metadata, deterministic prototype labels/color signals/quality signals, feed-import assets when available, and ranking options.
+- The server returns the app-facing `RankingResult` and mobile persists it into the local saved-trip snapshot.
+- `buildRankingResult` remains the local fallback if the deployed API is asleep, unreachable, or returns an error.
+
 Likely next dependencies:
 
 - Expo Router, once screens split out of the single-file prototype.

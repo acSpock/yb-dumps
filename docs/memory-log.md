@@ -2,6 +2,32 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - Mobile Analysis Integrated With Backend Ranker
+
+### Product/Architecture Decision
+
+- The mobile MVP should exercise the real backend ranking contract during normal carousel generation.
+- Keep the local fake ranker as a resilience fallback so UI work remains unblocked if Render is asleep, offline, or the analysis endpoint errors.
+- Mobile sends metadata-derived labels, color profile signals, quality signals, optional feed-import assets, and ranking options to `POST /analysis/rank`.
+- The backend remains responsible for top-pick selection, carousel composition, duplicate grouping, and feed-preview candidate scoring.
+
+### Implementation Done
+
+- Added `apps/mobile/src/services/analysisApi.ts`.
+- Updated the `Generate carousel options` workflow in `apps/mobile/App.tsx` to:
+  - mark the trip analysis job as running
+  - show a backend-ranking step in the progress UI
+  - call `${EXPO_PUBLIC_API_BASE_URL}/analysis/rank`
+  - replace the project result with the backend `RankingResult`
+  - persist the generated result to local saved trips
+  - fall back to `buildRankingResult` with an honest workflow message if the API call fails
+- Local mobile env points at the live Render API with `EXPO_PUBLIC_API_BASE_URL=https://yb-dumps-api.onrender.com`.
+
+### Validation
+
+- `npm run typecheck` passes in `apps/mobile`.
+- A direct live Render `POST /analysis/rank` smoke test returned `200` and produced 3 carousel variations.
+
 ## 2026-06-13 - Server-Side Ranking And Composition Prototype
 
 ### Product/Architecture Decision
