@@ -1,0 +1,12 @@
+{
+  "name": "trip-picks-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "../../apps/mobile/node_modules/.bin/tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "npm run build && NODE_ENV=test node --test dist/**/*.test.js",
+    "typecheck": "../../apps/mobile/node_modules/.bin/tsc -p tsconfig.json --noEmit"
+  }
+}

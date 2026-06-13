@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Trip Picks",
+    "slug": "trip-picks",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "trippicks",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.trippicks.mobile",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Trip Picks lets you choose trip photos for carousel generation and feed preview.",
+        "NSPhotoLibraryAddUsageDescription": "Trip Picks saves prepared carousel exports to your photo library so you can post them to Instagram."
+      }
+    },
+    "android": {
+      "package": "com.trippicks.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Trip Picks lets you choose trip photos for carousel generation and feed preview."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Trip Picks lets you choose trip photos for carousel generation and feed preview.",
+          "savePhotosPermission": "Trip Picks saves prepared carousel exports to your photo library so you can post them to Instagram."
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ]
+    ]
+  }
+}
