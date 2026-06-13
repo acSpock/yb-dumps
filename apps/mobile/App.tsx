@@ -156,7 +156,7 @@ function apiErrorMessage(error: unknown, fallback: string) {
 
 function instagramSettingsSummary(instagram: InstagramConnectionState) {
   if (instagram.status === 'setup_required') {
-    return 'Meta app env vars are missing on the local API.';
+    return 'Meta app env vars are missing on the API.';
   }
 
   if (instagram.status === 'error') {
@@ -164,18 +164,18 @@ function instagramSettingsSummary(instagram: InstagramConnectionState) {
   }
 
   if (instagram.status !== 'connected') {
-    return 'Instagram is not connected yet.';
+    return 'Personal accounts do not need a connection. Export is the default Instagram workflow.';
   }
 
-  const accountLabel = instagram.accountType === 'professional' ? 'professional account' : 'personal account';
+  const accountLabel = instagram.accountType === 'professional' ? 'Creator/Business account' : 'personal account';
   const capability = instagram.publishCapability?.status;
 
   if (capability === 'available') {
-    return `${instagram.username ? `@${instagram.username}` : 'Instagram'} connected with API publishing available.`;
+    return `${instagram.username ? `@${instagram.username}` : 'Instagram'} connected with Creator API publishing available.`;
   }
 
   if (capability === 'requires_professional_account') {
-    return `${instagram.username ? `@${instagram.username}` : 'Instagram'} connected as a ${accountLabel}. Use export unless this account becomes publish-eligible.`;
+    return `${instagram.username ? `@${instagram.username}` : 'Instagram'} connected as a ${accountLabel}. Use export unless this account is Creator/Business publish-eligible.`;
   }
 
   return `${instagram.username ? `@${instagram.username}` : 'Instagram'} connected as a ${accountLabel}.`;
@@ -618,20 +618,20 @@ export default function App() {
     const authUrl = instagramAuthStartUrl(sessionId, returnUrl);
     setLastInstagramAuthUrl(authUrl);
 
-    setInstagramStatusMessage('Opening Instagram login...');
-    setWorkflowMessage('Opening Instagram login...');
+    setInstagramStatusMessage('Opening Meta Creator/Business login...');
+    setWorkflowMessage('Opening Meta Creator/Business login...');
 
     try {
       if (Platform.OS !== 'web') {
         setSettingsVisible(false);
         await wait(250);
-        setInstagramStatusMessage('Instagram login opened. Return to Trip Picks after approving access.');
-        setWorkflowMessage('Instagram login opened in your browser. Return here after approving access.');
+        setInstagramStatusMessage('Creator/Business login opened. Return to Trip Picks after approving access.');
+        setWorkflowMessage('Creator/Business login opened in your browser. Return here after approving access.');
         const result = await WebBrowser.openBrowserAsync(authUrl);
 
         if (result.type === 'cancel' || result.type === 'dismiss') {
           setSettingsVisible(true);
-          setInstagramStatusMessage('Instagram login was closed before returning to Trip Picks.');
+          setInstagramStatusMessage('Creator/Business login was closed before returning to Trip Picks.');
         }
 
         return;
@@ -640,7 +640,7 @@ export default function App() {
       const result = await WebBrowser.openAuthSessionAsync(authUrl, returnUrl);
 
       if (result.type === 'cancel') {
-        setInstagramStatusMessage('Instagram login was canceled.');
+        setInstagramStatusMessage('Creator/Business login was canceled.');
         return;
       }
 
@@ -653,7 +653,7 @@ export default function App() {
       }
 
       if (result.type === 'dismiss') {
-        setInstagramStatusMessage('Instagram login was dismissed.');
+        setInstagramStatusMessage('Creator/Business login was dismissed.');
         setSettingsVisible(true);
         return;
       }
@@ -665,15 +665,15 @@ export default function App() {
         setWorkflowMessage(`Connected Instagram${nextInstagram.username ? ` as @${nextInstagram.username}` : ''}.`);
       }
     } catch (error) {
-      const message = apiErrorMessage(error, 'Instagram login could not be opened.');
+      const message = apiErrorMessage(error, 'Creator/Business login could not be opened.');
       setSettingsVisible(true);
       setInstagramStatusMessage(message);
 
       if (Platform.OS !== 'web') {
-        Alert.alert('Instagram login did not open', message, [
+        Alert.alert('Creator/Business login did not open', message, [
           { text: 'Cancel', style: 'cancel' },
           {
-            text: 'Open login link',
+            text: 'Open API login',
             onPress: () => {
               void WebBrowser.openBrowserAsync(authUrl);
             },
@@ -688,7 +688,7 @@ export default function App() {
       return;
     }
 
-    setInstagramStatusMessage('Opening Instagram login link...');
+    setInstagramStatusMessage('Opening Creator/Business login link...');
 
     try {
       if (Platform.OS !== 'web') {
@@ -701,7 +701,7 @@ export default function App() {
       await Linking.openURL(lastInstagramAuthUrl);
     } catch (error) {
       setSettingsVisible(true);
-      setInstagramStatusMessage(apiErrorMessage(error, 'Instagram login link could not be opened.'));
+      setInstagramStatusMessage(apiErrorMessage(error, 'Creator/Business login link could not be opened.'));
     }
   }
 
@@ -750,7 +750,7 @@ export default function App() {
   async function useInstagramFeed() {
     if (instagram.status !== 'connected') {
       setSettingsVisible(true);
-      setWorkflowMessage('Connect Instagram in Settings before importing your feed.');
+      setWorkflowMessage('Use a grid screenshot or selected recent posts for personal accounts. Creator/Business API connection is optional in Settings.');
       return;
     }
 
@@ -773,7 +773,7 @@ export default function App() {
           instagram: connection,
           updatedAt: new Date().toISOString(),
         }),
-        `Imported ${feedImport.assets.length} recent Instagram posts for feed preview.`,
+        `Imported ${feedImport.assets.length} recent posts through the Creator/Business API for feed preview.`,
       );
     } catch (error) {
       const message = apiErrorMessage(error, 'Instagram feed import failed.');
@@ -797,7 +797,7 @@ export default function App() {
 
     if (instagram.status !== 'connected') {
       setSettingsVisible(true);
-      setWorkflowMessage('Connect Instagram in Settings before trying to publish.');
+      setWorkflowMessage('Direct API publishing is only for connected Creator/Business accounts. Export is the personal-account path.');
       return;
     }
 
@@ -1158,7 +1158,7 @@ function SettingsModal({
           <View style={styles.settingsHeader}>
             <View style={styles.flexText}>
               <Text style={styles.kicker}>Settings</Text>
-              <Text style={styles.headerTitle}>Instagram</Text>
+              <Text style={styles.headerTitle}>Instagram export</Text>
               <Text style={styles.bodyText}>{statusMessage}</Text>
             </View>
             <Pressable
@@ -1173,7 +1173,7 @@ function SettingsModal({
           <View style={styles.settingsCard}>
             <View style={styles.summaryRow}>
               <View style={styles.flexText}>
-                <Text style={styles.panelTitle}>{connected ? instagram.username ? `@${instagram.username}` : 'Connected account' : 'No connected account'}</Text>
+                <Text style={styles.panelTitle}>{connected ? instagram.username ? `@${instagram.username}` : 'Connected account' : 'Personal export ready'}</Text>
                 <Text style={styles.bodyText}>{instagramConnectionDetail(instagram)}</Text>
               </View>
               <View style={[styles.statusPill, instagram.status === 'error' && styles.statusPillError]}>
@@ -1204,14 +1204,14 @@ function SettingsModal({
           </View>
 
           <View style={styles.settingsCard}>
-            <Text style={styles.panelTitle}>Connection</Text>
+            <Text style={styles.panelTitle}>Optional Creator/Business connection</Text>
             <Text style={styles.bodyText}>
-              OAuth opens through the API so Meta app secrets stay off the phone. If the browser does not appear,
-              use the login link fallback after tapping connect once.
+              Meta requires a professional Instagram account for API feed access and direct publishing. Everyday
+              personal accounts should use export/share and manual feed import instead.
             </Text>
             <View style={styles.actionRow}>
               <PrimaryButton
-                label={connected ? 'Reconnect Instagram' : 'Connect Instagram'}
+                label={connected ? 'Reconnect Creator API' : 'Connect Creator/Business API'}
                 onPress={onConnect}
               />
               <SecondaryButton
@@ -1226,7 +1226,7 @@ function SettingsModal({
               ) : null}
               {!connected && lastAuthUrl ? (
                 <SecondaryButton
-                  label="Open login link"
+                  label="Open API login"
                   onPress={onOpenAuthUrl}
                 />
               ) : null}
@@ -1236,11 +1236,12 @@ function SettingsModal({
           <View style={styles.settingsCard}>
             <Text style={styles.panelTitle}>Feed and publishing</Text>
             <Text style={styles.bodyText}>
-              Personal accounts use export/share. API publishing appears only when Meta reports a publish-capable professional account and public rendered slide URLs are available.
+              Personal accounts use Camera Roll export and the native share sheet. API publishing appears only for
+              Meta-approved Creator/Business accounts after rendered slide URLs are public.
             </Text>
             <View style={styles.actionRow}>
               <PrimaryButton
-                label="Refresh feed"
+                label="Creator API feed import"
                 onPress={onRefreshFeed}
               />
             </View>
@@ -1860,6 +1861,7 @@ function CarouselPreviewModal({
   const artworkHeight = Math.min(artworkWidth * 1.25, height * (isReplacing ? 0.38 : 0.55));
   const activeSlide = variation?.slides[activeSlideIndex];
   const isSelected = variation?.variationId === selectedVariationId;
+  const canUseCreatorApi = instagram?.publishCapability?.status === 'available';
 
   useEffect(() => {
     setActiveSlideIndex(0);
@@ -1965,19 +1967,28 @@ function CarouselPreviewModal({
             <View style={styles.modalSecondaryRow}>
               <Pressable
                 accessibilityRole="button"
-                onPress={() => onPrepareInstagramPost(variation.variationId)}
+                onPress={() => onSaveToCameraRoll(variation.variationId)}
                 style={({ pressed }) => [styles.modalSecondaryButton, pressed && styles.buttonPressed]}
               >
-                <Text style={styles.modalSecondaryButtonText}>Use Instagram</Text>
+                <Text style={styles.modalSecondaryButtonText}>Export for Instagram</Text>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
                 onPress={() => onSaveToCameraRoll(variation.variationId)}
                 style={({ pressed }) => [styles.modalSecondaryButton, pressed && styles.buttonPressed]}
               >
-                <Text style={styles.modalSecondaryButtonText}>Export photos</Text>
+                <Text style={styles.modalSecondaryButtonText}>Save photos</Text>
               </Pressable>
             </View>
+            {canUseCreatorApi ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => onPrepareInstagramPost(variation.variationId)}
+                style={({ pressed }) => [styles.modalTertiaryButton, pressed && styles.buttonPressed]}
+              >
+                <Text style={styles.modalTertiaryButtonText}>Publish with Creator API</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               onPress={() => setIsReplacing((currentValue) => !currentValue)}
@@ -2292,7 +2303,7 @@ function FeedImportPanel({
         <View style={styles.flexText}>
           <Text style={styles.panelTitle}>Import current feed</Text>
           <Text style={styles.bodyText}>
-            Connect Instagram from Settings, or use screenshot/manual imports as the reliable fallback.
+            For personal accounts, use a grid screenshot or select recent posts. Creator/Business API import is optional.
           </Text>
         </View>
         <View style={styles.statusPill}>
@@ -2306,12 +2317,12 @@ function FeedImportPanel({
           onPress={onUseInstagramFeed}
           style={({ pressed }) => [styles.integrationChoice, pressed && styles.buttonPressed]}
         >
-          <Text style={styles.panelTitle}>Use Instagram</Text>
+          <Text style={styles.panelTitle}>Creator API</Text>
           <Text style={styles.bodyText}>{instagramStatusLabel(instagram)}</Text>
         </Pressable>
         <View style={styles.integrationChoice}>
-          <Text style={styles.panelTitle}>Export photos</Text>
-          <Text style={styles.bodyText}>Reliable posting path for personal Instagram accounts.</Text>
+          <Text style={styles.panelTitle}>Manual feed</Text>
+          <Text style={styles.bodyText}>Best path for everyday personal accounts.</Text>
         </View>
       </View>
 
@@ -2333,16 +2344,16 @@ function FeedImportPanel({
 
       <View style={styles.actionRow}>
         <PrimaryButton
-          label="Use Instagram"
-          onPress={onUseInstagramFeed}
-        />
-        <PrimaryButton
           label="Import grid screenshot"
           onPress={() => onImportFeedSource('screenshot')}
         />
         <SecondaryButton
           label="Select recent posts"
           onPress={() => onImportFeedSource('recent_posts')}
+        />
+        <SecondaryButton
+          label="Creator API import"
+          onPress={onUseInstagramFeed}
         />
       </View>
     </View>
@@ -2597,33 +2608,33 @@ function instagramStatusLabel(instagram?: InstagramConnectionState) {
 
 function instagramConnectionDetail(instagram: InstagramConnectionState) {
   if (instagram.status === 'setup_required') {
-    return 'Add Meta app credentials to the local API, then reconnect.';
+    return 'Add Meta app credentials to the API only when testing Creator/Business API access.';
   }
 
   if (instagram.status === 'error') {
-    return instagram.errorMessage ?? 'The local API could not load Instagram status.';
+    return instagram.errorMessage ?? 'The API could not load Instagram status.';
   }
 
   if (instagram.status !== 'connected') {
-    return 'Connect once here, then carousel and feed screens can use the account.';
+    return 'No Instagram login is required for personal-account export, sharing, or manual feed preview.';
   }
 
   const accountType = instagram.accountType === 'professional' ? 'Professional' : 'Personal';
   const capability = instagram.publishCapability?.status;
 
   if (capability === 'available') {
-    return `${accountType} account. API publishing is available when rendered public slide URLs exist.`;
+    return `${accountType} account. Creator API publishing is available when rendered public slide URLs exist.`;
   }
 
   if (capability === 'requires_professional_account') {
-    return `${accountType} account. Use export/share for posting unless this account becomes professional.`;
+    return `${accountType} account. Meta requires Creator/Business eligibility for API publishing; use export/share.`;
   }
 
   if (capability === 'requires_public_media') {
     return `${accountType} account. Carousel publishing needs rendered public media URLs first.`;
   }
 
-  return `${accountType} account connected. Feed import is available through the local API.`;
+  return `${accountType} account connected. Feed import is available through the API.`;
 }
 
 function exportStatusLabel(status?: ExportStatus) {

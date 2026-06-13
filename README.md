@@ -67,7 +67,8 @@ Model service:
 4. Generate 3 finished carousel options with 10-20 slides each.
 5. Support composed carousel slides such as vertical triptychs, hero-plus-details, and detail grids.
 6. Provide feed preview from a grid screenshot or manually selected recent posts.
-7. Let users connect Instagram through a backend OAuth flow, while keeping export/share as the fallback.
+7. Make export/share the primary Instagram handoff for personal accounts.
+8. Keep Meta OAuth as an optional Creator/Business account path only.
 
 ## Non-Goals For MVP
 

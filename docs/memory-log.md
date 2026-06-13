@@ -10,14 +10,22 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 - `GET /health` returns `{"ok":true,"metaConfigured":true}`, confirming the Render service is reachable and Meta env vars are configured.
 - Local Expo testing should use `apps/mobile/.env` with `EXPO_PUBLIC_API_BASE_URL=https://yb-dumps-api.onrender.com`.
 - Because Expo injects `EXPO_PUBLIC_*` values at bundle time, restart Expo with cache clear after changing this value.
-- The app can now test Settings -> Connect Instagram against the live Render OAuth start URL instead of a localhost API.
+- The app can now test the optional Settings -> Creator/Business API connection against the live Render OAuth start URL instead of a localhost API.
 
 ### Mobile OAuth UX Fix
 
 - Settings now displays the active API base URL so stale localhost bundles are obvious.
-- Native iOS/Android Connect Instagram now closes the Settings modal, opens the Render OAuth URL with `WebBrowser.openBrowserAsync`, and listens for the `instagram-callback` deep link to refresh connection status.
+- Native iOS/Android Creator/Business API connection now closes the Settings modal, opens the Render OAuth URL with `WebBrowser.openBrowserAsync`, and listens for the `instagram-callback` deep link to refresh connection status.
 - Web keeps the Expo auth-session flow.
-- Settings exposes an `Open login link` fallback after the first connect attempt if the native browser does not appear.
+- Settings exposes an `Open API login` fallback after the first connect attempt if the native browser does not appear.
+
+### Meta Professional Account Product Correction
+
+- Live testing showed Meta prompts personal users to convert to a professional account when using the current Instagram API scopes.
+- Product decision: everyday personal accounts should not connect OAuth or convert accounts just to use Trip Picks.
+- Primary user flow is now `Export for Instagram` plus Camera Roll/share sheet and manual feed import by grid screenshot or selected recent posts.
+- Meta OAuth remains only an optional Creator/Business API path for eligible users and future beta testing.
+- Carousel modal no longer routes the normal Instagram action into Meta OAuth; it exports for Instagram instead.
 
 ## 2026-06-13 - GitHub Repo Consolidated At Parent Root
 

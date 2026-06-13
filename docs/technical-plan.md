@@ -165,10 +165,10 @@ Frontend experience:
 
 - A selected carousel variation becomes an export package.
 - Each generated slide should eventually render into an image asset.
-- Path 1: `Use Instagram` after account connection, with direct publish only when eligibility and rendered public URLs are available.
-- Path 2: `Export photos` by saving rendered slides to Camera Roll in order.
-- Native share sheet / Instagram handoff can sit behind the Instagram path where platform rules allow.
-- Camera Roll remains the reliable fallback when Instagram deep-link/share behavior is limited.
+- Path 1: `Export for Instagram` by saving rendered slides to Camera Roll in order.
+- Path 2: optional Creator/Business API publishing, only when eligibility and rendered public URLs are available.
+- Native share sheet / Instagram handoff can sit behind the export path where platform rules allow.
+- Camera Roll remains the reliable default because Meta API publishing is not available for everyday personal accounts.
 
 Likely implementation dependencies:
 
@@ -180,12 +180,12 @@ Likely implementation dependencies:
 
 Current implementation:
 
-- Global Settings owns Instagram connection using `WebBrowser.openAuthSessionAsync` and the local API OAuth start/callback endpoints.
+- Global Settings owns optional Creator/Business Instagram connection using the API OAuth start/callback endpoints.
 - Store only an anonymous `deviceSessionId` on device; Meta app secrets and tokens stay on `services/api`.
 - Support `not_connected`, `connected`, `setup_required`, and `error` connection states.
 - Track account type, permissions, publish capability, token expiry, last feed import, and share status.
-- `Use Instagram` in feed preview calls `POST /instagram/import-feed`.
-- `Use Instagram` in the carousel modal calls `POST /instagram/publish-carousel`.
+- Creator API import in feed preview calls `POST /instagram/import-feed`.
+- Creator API publishing calls `POST /instagram/publish-carousel`, but the primary carousel modal action is export.
 - Direct publish returns honest states: `requires_export`, `render_required`, `setup_required`, `published`, or `failed`.
 
 Backend requirements already scaffolded:

@@ -78,11 +78,11 @@ MVP behavior:
 
 - User picks a carousel variation.
 - App opens a full-screen carousel preview modal with two clear handoff paths.
-- Path 1: `Use Instagram` for connected-account feed import and guarded publishing.
-- Path 2: `Export photos` for saving rendered carousel slides to Camera Roll in order, ideally into a `Trip Picks` album.
-- The current implementation uses a local Meta OAuth backend and explicit account/publish eligibility states.
-- Always make Camera Roll the reliable fallback, because Instagram import behavior can be inconsistent.
-- Personal accounts should route to export/share instead of pretending API publish is available.
+- Path 1: `Export for Instagram` for saving rendered carousel slides to Camera Roll in order, ideally into a `Trip Picks` album.
+- Path 2: optional Creator/Business API publishing, only when Meta account eligibility and public rendered media URLs exist.
+- The current implementation uses a local Meta OAuth backend only for the optional Creator/Business path.
+- Always make Camera Roll the reliable primary path for everyday personal accounts.
+- Personal accounts should never be asked to convert to professional just to use the product.
 
 The product should frame export as a package of ready slides, not a loose list of source photos.
 
@@ -104,11 +104,11 @@ The product needs an Instagram path, but it should not depend on direct API publ
 
 MVP behavior:
 
-- `Use Instagram` imports recent-feed media through the local backend after OAuth.
-- Manual fallback remains:
+- Manual import is the primary path:
   - grid screenshot
   - selected recent posts
-- Feed preview can score against Instagram-imported assets or manual assets.
+- Optional Creator/Business API import can use the backend after OAuth.
+- Feed preview can score against manual assets or Creator/Business API imported assets.
 - Direct publishing stays behind Meta backend account eligibility checks and public rendered media URLs.
 
 ## Not Core For MVP
@@ -136,9 +136,9 @@ Duplicate detection, moment clustering, people/scene diversity, and user taste c
 7. User optionally replaces one image in a generated slide.
 8. User chooses one edit.
 9. App saves the generated trip locally.
-10. User chooses `Use Instagram` or `Export photos`.
+10. User chooses `Export for Instagram`; Creator/Business API publishing is optional and hidden behind eligibility.
 11. User optionally opens `Feed preview`.
-12. User imports Instagram, provides a grid screenshot, or selects recent posts.
+12. User provides a grid screenshot, selects recent posts, or uses optional Creator/Business API import.
 13. App recommends the best next-feed photo and shows the grid preview.
 
 ## Main Screens
