@@ -15,7 +15,7 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 ### Mobile OAuth UX Fix
 
 - Settings now displays the active API base URL so stale localhost bundles are obvious.
-- Native iOS/Android Connect Instagram now closes the Settings modal, opens the Render OAuth URL with `Linking.openURL`, and listens for the `instagram-callback` deep link to refresh connection status.
+- Native iOS/Android Connect Instagram now closes the Settings modal, opens the Render OAuth URL with `WebBrowser.openBrowserAsync`, and listens for the `instagram-callback` deep link to refresh connection status.
 - Web keeps the Expo auth-session flow.
 - Settings exposes an `Open login link` fallback after the first connect attempt if the native browser does not appear.
 

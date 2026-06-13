@@ -625,9 +625,15 @@ export default function App() {
       if (Platform.OS !== 'web') {
         setSettingsVisible(false);
         await wait(250);
-        await Linking.openURL(authUrl);
         setInstagramStatusMessage('Instagram login opened. Return to Trip Picks after approving access.');
         setWorkflowMessage('Instagram login opened in your browser. Return here after approving access.');
+        const result = await WebBrowser.openBrowserAsync(authUrl);
+
+        if (result.type === 'cancel' || result.type === 'dismiss') {
+          setSettingsVisible(true);
+          setInstagramStatusMessage('Instagram login was closed before returning to Trip Picks.');
+        }
+
         return;
       }
 
@@ -669,7 +675,7 @@ export default function App() {
           {
             text: 'Open login link',
             onPress: () => {
-              void Linking.openURL(authUrl);
+              void WebBrowser.openBrowserAsync(authUrl);
             },
           },
         ]);
@@ -688,6 +694,8 @@ export default function App() {
       if (Platform.OS !== 'web') {
         setSettingsVisible(false);
         await wait(250);
+        await WebBrowser.openBrowserAsync(lastInstagramAuthUrl);
+        return;
       }
 
       await Linking.openURL(lastInstagramAuthUrl);
