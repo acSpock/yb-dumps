@@ -8,7 +8,7 @@
     "outDir": "dist",
     "strict": true,
     "skipLibCheck": true,
-    "typeRoots": ["../../apps/mobile/node_modules/@types"]
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }
