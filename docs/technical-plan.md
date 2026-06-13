@@ -68,6 +68,7 @@ Keep boring:
 
 - Local Node/TypeScript API scaffold now exists under `services/api`.
 - Current service uses a dependency-free Node HTTP server for Meta OAuth, Instagram feed import, and guarded publish calls.
+- Current service also exposes `POST /analysis/rank` for the first server-side ranking/composition prototype.
 - Dev token storage is a gitignored JSON file under `services/api/data`.
 - Production backend should still move to Postgres, object storage for uploaded/rendered images, and a queue for model jobs.
 
@@ -101,6 +102,19 @@ Server-side first:
 - rank a top candidate pool
 - compose 3 carousel options with slide templates
 - score feed-fit candidates against a grid/profile embedding
+
+Current implementation:
+
+- `services/api/src/analysisContracts.ts` defines the API-side ranking/result contract.
+- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0`.
+- `POST /analysis/rank` accepts metadata, labels, color profiles, optional embeddings, optional quality/aesthetic signals, and optional feed-profile assets.
+- The current ranker is intentionally deterministic:
+  - score quality, aesthetics, coverage, and feed fit
+  - detect near-duplicate/burst groups from embeddings plus moment/time proximity
+  - select a diverse top pool using relevance plus novelty/diversity constraints
+  - compose up to 3 carousel variations capped at 20 slides
+  - prefer landscape/square photos for stacked `vertical_triptych` templates
+- Later real ML should replace feature extraction, not the whole result contract.
 
 The carousel composer should not only sort images. It should select and arrange slides under constraints:
 

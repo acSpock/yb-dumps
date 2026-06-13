@@ -1,7 +1,9 @@
 import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 
+import { AnalysisRankRequest } from './analysisContracts.js';
 import { createMetaClient, MetaClient } from './metaClient.js';
+import { analyzeTripPhotos } from './modelRanker.js';
 import { createOAuthState, decodeOAuthState } from './oauthState.js';
 import { hasMetaCredentials, readConfig } from './config.js';
 import {
@@ -251,6 +253,24 @@ async function routePublishCarousel(response: ServerResponse, request: IncomingM
   sendJson(response, 200, result);
 }
 
+async function routeAnalysisRank(response: ServerResponse, request: IncomingMessage) {
+  const body = await readJsonBody(request);
+  const analysisRequest: AnalysisRankRequest = {
+    feedProfile: isRecord(body.feedProfile) ? body.feedProfile as AnalysisRankRequest['feedProfile'] : undefined,
+    jobId: typeof body.jobId === 'string' ? body.jobId : undefined,
+    options: isRecord(body.options) ? body.options as AnalysisRankRequest['options'] : undefined,
+    photos: Array.isArray(body.photos) ? body.photos as AnalysisRankRequest['photos'] : [],
+    projectId: requiredString(body.projectId, 'projectId'),
+  };
+  const result = analyzeTripPhotos(analysisRequest);
+
+  sendJson(response, 200, result);
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export function createApiServer(context: AppContext) {
   return http.createServer((request, response) => {
     void (async () => {
@@ -299,11 +319,16 @@ export function createApiServer(context: AppContext) {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/analysis/rank') {
+        await routeAnalysisRank(response, request);
+        return;
+      }
+
       sendJson(response, 404, { message: 'Not found.' });
     })().catch((error) => {
-      sendJson(response, 500, {
-        message: error instanceof Error ? error.message : 'Unexpected API error.',
-      });
+      const message = error instanceof Error ? error.message : 'Unexpected API error.';
+      const statusCode = message.includes('required') || message.includes('photos must') ? 400 : 500;
+      sendJson(response, statusCode, { message });
     });
   });
 }

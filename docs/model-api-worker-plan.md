@@ -172,6 +172,7 @@ These are REST-shaped endpoints for planning only. Shared TypeScript schemas sho
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `POST` | `/analysis/rank` | Implemented heuristic-v0 ranking/composition endpoint. Accepts photo metadata/features and optional feed-profile assets; returns the current `RankingResult` shape. |
 | `POST` | `/v1/projects` | Create a trip project. |
 | `POST` | `/v1/projects/:projectId/assets:bulkCreate` | Register selected photos and receive signed upload targets. |
 | `PATCH` | `/v1/projects/:projectId/assets/:photoId` | Update upload status or corrected metadata. |

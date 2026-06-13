@@ -2,6 +2,35 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - Server-Side Ranking And Composition Prototype
+
+### Product/Architecture Decision
+
+- Build a server-side curation engine first, not a custom foundation model.
+- The current server endpoint is `POST /analysis/rank` in `services/api`.
+- The endpoint returns the app-facing `RankingResult` shape: top picks, carousel variations, photo scores, duplicate groups, feed-preview candidates, and warnings.
+- Real neural models should feed this ranker with embeddings and quality/aesthetic scores later; the ranker/composer remains the constrained selection layer.
+
+### Implementation Done
+
+- Added `services/api/src/analysisContracts.ts` with API-side analysis request/result types.
+- Added `services/api/src/modelRanker.ts` as `heuristic-curation-v0.1.0`.
+- The ranker:
+  - scores quality, aesthetics, coverage, and feed fit
+  - accepts optional embeddings and model scores but works from metadata/labels/colors
+  - detects near-duplicate/burst groups
+  - picks a diverse top pool with relevance plus novelty constraints
+  - composes up to 3 carousel variations capped at 20 slides
+  - prefers landscape/square photos for stacked `vertical_triptych` templates
+  - scores feed-fit against manual or imported feed-profile assets
+- Added `POST /analysis/rank` to the API server.
+
+### Validation
+
+- `npm run typecheck` passes in `services/api`.
+- `npm test` passes in `services/api` with localhost-bind approval.
+- Tests cover duplicate winner selection, carousel slide limit, landscape preference for stacked templates, feed-fit scoring, and the HTTP endpoint.
+
 ## 2026-06-13 - Render API Live For Local Mobile Testing
 
 ### Deployment Decision

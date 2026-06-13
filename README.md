@@ -98,3 +98,11 @@ The first local Instagram API scaffold now lives under:
 ```text
 services/api/
 ```
+
+The first server-side analysis endpoint also lives there:
+
+```text
+POST /analysis/rank
+```
+
+It accepts project photos plus optional feed-profile assets and returns top picks, carousel variations, duplicate groups, photo scores, and feed-preview candidates. The current engine is a deterministic heuristic ranker that can consume future neural embeddings and aesthetic/quality signals.

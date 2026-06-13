@@ -3,6 +3,7 @@ import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import test from 'node:test';
 
+import { RankingResult } from './analysisContracts.js';
 import {
   disconnectedInstagram,
   InstagramPublishResult,
@@ -149,5 +150,54 @@ test('publish delegates to Meta client for professional accounts with public med
     assert.equal(response.status, 200);
     assert.equal(body.status, 'published');
     assert.equal(body.publishId, 'published-1');
+  });
+});
+
+test('analysis rank endpoint returns top picks, carousels, and feed candidates', async () => {
+  const server = createApiServer({
+    metaConfigured: true,
+    oauthSecret: 'secret',
+    store: createMemoryStore(),
+  });
+
+  await withServer(server, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/analysis/rank`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        feedProfile: {
+          assets: [
+            {
+              colorProfile: { brightness: 0.62, contrast: 0.57, saturation: 0.5, warmth: 0.72 },
+              id: 'feed-1',
+              labels: ['beach'],
+            },
+          ],
+        },
+        options: {
+          carouselMaxSlides: 20,
+          topPoolSize: 8,
+        },
+        photos: Array.from({ length: 12 }, (_, index) => ({
+          capturedAt: `2026-06-01T12:${String(index).padStart(2, '0')}:00.000Z`,
+          colorProfile: { brightness: 0.58, contrast: 0.58, saturation: 0.54, warmth: index % 2 ? 0.7 : 0.55 },
+          height: index % 3 === 0 ? 1200 : 1800,
+          labels: index % 2 ? ['beach', 'people'] : ['detail'],
+          momentId: `moment-${Math.floor(index / 3)}`,
+          photoId: `photo-${index}`,
+          qualitySignals: { faceCount: index % 2, sharpness: 0.82 },
+          width: index % 3 === 0 ? 2000 : 1200,
+        })),
+        projectId: 'project-analysis',
+      }),
+    });
+    const body = (await response.json()) as RankingResult;
+
+    assert.equal(response.status, 200);
+    assert.equal(body.projectId, 'project-analysis');
+    assert.ok(body.topPicks.length > 0);
+    assert.ok(body.carouselVariations.length > 0);
+    assert.ok(body.carouselVariations.every((variation) => variation.slideCount <= 20));
+    assert.ok(body.feedPreviewCandidates.length > 0);
   });
 });

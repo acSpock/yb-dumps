@@ -145,3 +145,27 @@ Move selective pieces on-device later:
 - thumbnail generation
 - obvious duplicate detection
 - possibly a compact aesthetic/personal ranker
+
+## Implemented Prototype
+
+The first server-side prototype is implemented in `services/api` rather than a separate worker process:
+
+- `POST /analysis/rank`
+- `services/api/src/analysisContracts.ts`
+- `services/api/src/modelRanker.ts`
+
+This is `heuristic-curation-v0.1.0`. It is not a trained neural model yet. It is the orchestration layer that a real model worker will feed:
+
+- accepts optional neural embeddings per photo
+- accepts optional quality/aesthetic model scores
+- falls back to deterministic metadata/label/color features when those model outputs are missing
+- groups duplicate bursts
+- picks a diverse top pool
+- composes carousel variations capped at Instagram's 20-slide limit
+- prefers horizontal photos for stacked layered templates
+- scores feed-fit from palette, brightness, subject mix, crop suitability, and optional feed embeddings
+
+Next model step:
+
+- Add an inference worker that produces CLIP/DINO-style embeddings and NIMA-style quality/aesthetic signals.
+- Keep `/analysis/rank` as the composition/ranking layer so the mobile app contract stays stable.
