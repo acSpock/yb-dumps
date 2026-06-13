@@ -81,6 +81,30 @@ type ExportVariationResult = {
   message: string;
 };
 
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function queryParamValue(
+  queryParams: Linking.ParsedURL['queryParams'],
+  key: string,
+) {
+  const value = queryParams?.[key];
+
+  if (Array.isArray(value)) {
+    return String(value[0] ?? '');
+  }
+
+  return value ? String(value) : '';
+}
+
+function isInstagramCallbackUrl(url: string) {
+  const parsed = Linking.parse(url);
+  return parsed.path === 'instagram-callback' || url.includes('/instagram-callback');
+}
+
 async function readLocalSecret(key: string) {
   try {
     if (Platform.OS !== 'web' && (await SecureStore.isAvailableAsync())) {
@@ -305,6 +329,7 @@ export default function App() {
   const [instagram, setInstagram] = useState<InstagramConnectionState>(disconnectedInstagram);
   const [instagramStatusMessage, setInstagramStatusMessage] = useState('Instagram is not connected yet.');
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [lastInstagramAuthUrl, setLastInstagramAuthUrl] = useState<string | null>(null);
 
   const photosById = useMemo(() => {
     return new Map((project?.photos ?? []).map((photo) => [photo.photoId, photo]));
@@ -337,6 +362,28 @@ export default function App() {
 
     return () => {
       canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleIncomingUrl(event: { url: string }) {
+      if (!isInstagramCallbackUrl(event.url)) {
+        return;
+      }
+
+      void handleInstagramCallbackUrl(event.url);
+    }
+
+    const subscription = Linking.addEventListener('url', handleIncomingUrl);
+
+    void Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleIncomingUrl({ url });
+      }
+    });
+
+    return () => {
+      subscription.remove();
     };
   }, []);
 
@@ -517,14 +564,73 @@ export default function App() {
     }
   }
 
+  async function handleInstagramCallbackUrl(url: string, sessionId?: string) {
+    if (!isInstagramCallbackUrl(url)) {
+      return false;
+    }
+
+    const parsed = Linking.parse(url);
+    const status = queryParamValue(parsed.queryParams, 'instagram_status');
+    const errorMessage = queryParamValue(parsed.queryParams, 'instagram_error');
+
+    setSettingsVisible(true);
+
+    if (status === 'setup_required') {
+      setInstagram({
+        status: 'setup_required',
+        publishCapability: {
+          status: 'setup_required',
+          reason: 'Add Meta app env vars to the API before connecting.',
+        },
+        shareStatus: 'failed',
+      });
+      setInstagramStatusMessage('Meta app env vars are missing on the API.');
+      return true;
+    }
+
+    if (errorMessage) {
+      setInstagram({
+        status: 'error',
+        errorMessage,
+        publishCapability: {
+          status: 'unavailable',
+          reason: errorMessage,
+        },
+        shareStatus: 'failed',
+      });
+      setInstagramStatusMessage(errorMessage);
+      return true;
+    }
+
+    const nextSessionId = sessionId ?? (await ensureDeviceSessionId());
+    const nextInstagram = await refreshInstagramConnection(nextSessionId);
+
+    if (nextInstagram.status === 'connected') {
+      setWorkflowMessage(`Connected Instagram${nextInstagram.username ? ` as @${nextInstagram.username}` : ''}.`);
+    }
+
+    return true;
+  }
+
   async function connectInstagram() {
     const sessionId = await ensureDeviceSessionId();
     const returnUrl = Linking.createURL('instagram-callback');
     const authUrl = instagramAuthStartUrl(sessionId, returnUrl);
+    setLastInstagramAuthUrl(authUrl);
 
     setInstagramStatusMessage('Opening Instagram login...');
+    setWorkflowMessage('Opening Instagram login...');
 
     try {
+      if (Platform.OS !== 'web') {
+        setSettingsVisible(false);
+        await wait(250);
+        await Linking.openURL(authUrl);
+        setInstagramStatusMessage('Instagram login opened. Return to Trip Picks after approving access.');
+        setWorkflowMessage('Instagram login opened in your browser. Return here after approving access.');
+        return;
+      }
+
       const result = await WebBrowser.openAuthSessionAsync(authUrl, returnUrl);
 
       if (result.type === 'cancel') {
@@ -533,21 +639,17 @@ export default function App() {
       }
 
       if (result.type === 'success') {
-        const parsed = Linking.parse(result.url);
-        const status = String(parsed.queryParams?.instagram_status ?? '');
+        const handled = await handleInstagramCallbackUrl(result.url, sessionId);
 
-        if (status === 'setup_required') {
-          setInstagram({
-            status: 'setup_required',
-            publishCapability: {
-              status: 'setup_required',
-              reason: 'Add Meta app env vars to the local API before connecting.',
-            },
-            shareStatus: 'failed',
-          });
-          setInstagramStatusMessage('Meta app env vars are missing on the local API.');
+        if (handled) {
           return;
         }
+      }
+
+      if (result.type === 'dismiss') {
+        setInstagramStatusMessage('Instagram login was dismissed.');
+        setSettingsVisible(true);
+        return;
       }
 
       const nextInstagram = await refreshInstagramConnection(sessionId);
@@ -557,7 +659,41 @@ export default function App() {
         setWorkflowMessage(`Connected Instagram${nextInstagram.username ? ` as @${nextInstagram.username}` : ''}.`);
       }
     } catch (error) {
-      setInstagramStatusMessage(apiErrorMessage(error, 'Instagram login could not be completed.'));
+      const message = apiErrorMessage(error, 'Instagram login could not be opened.');
+      setSettingsVisible(true);
+      setInstagramStatusMessage(message);
+
+      if (Platform.OS !== 'web') {
+        Alert.alert('Instagram login did not open', message, [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Open login link',
+            onPress: () => {
+              void Linking.openURL(authUrl);
+            },
+          },
+        ]);
+      }
+    }
+  }
+
+  async function openLastInstagramAuthUrl() {
+    if (!lastInstagramAuthUrl) {
+      return;
+    }
+
+    setInstagramStatusMessage('Opening Instagram login link...');
+
+    try {
+      if (Platform.OS !== 'web') {
+        setSettingsVisible(false);
+        await wait(250);
+      }
+
+      await Linking.openURL(lastInstagramAuthUrl);
+    } catch (error) {
+      setSettingsVisible(true);
+      setInstagramStatusMessage(apiErrorMessage(error, 'Instagram login link could not be opened.'));
     }
   }
 
@@ -946,11 +1082,13 @@ export default function App() {
         apiBaseUrl={API_BASE_URL}
         deviceSessionId={deviceSessionId}
         instagram={instagram}
+        lastAuthUrl={lastInstagramAuthUrl}
         statusMessage={instagramStatusMessage}
         visible={settingsVisible}
         onClose={() => setSettingsVisible(false)}
         onConnect={connectInstagram}
         onDisconnect={disconnectInstagramAccount}
+        onOpenAuthUrl={openLastInstagramAuthUrl}
         onRefresh={() => void refreshInstagramConnection(undefined, true)}
         onRefreshFeed={useInstagramFeed}
       />
@@ -975,22 +1113,26 @@ function SettingsModal({
   apiBaseUrl,
   deviceSessionId,
   instagram,
+  lastAuthUrl,
   statusMessage,
   visible,
   onClose,
   onConnect,
   onDisconnect,
+  onOpenAuthUrl,
   onRefresh,
   onRefreshFeed,
 }: {
   apiBaseUrl: string;
   deviceSessionId: string | null;
   instagram: InstagramConnectionState;
+  lastAuthUrl: string | null;
   statusMessage: string;
   visible: boolean;
   onClose: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
+  onOpenAuthUrl: () => void;
   onRefresh: () => void;
   onRefreshFeed: () => void;
 }) {
@@ -1056,7 +1198,8 @@ function SettingsModal({
           <View style={styles.settingsCard}>
             <Text style={styles.panelTitle}>Connection</Text>
             <Text style={styles.bodyText}>
-              OAuth opens through the local API so Meta app secrets stay off the phone.
+              OAuth opens through the API so Meta app secrets stay off the phone. If the browser does not appear,
+              use the login link fallback after tapping connect once.
             </Text>
             <View style={styles.actionRow}>
               <PrimaryButton
@@ -1071,6 +1214,12 @@ function SettingsModal({
                 <SecondaryButton
                   label="Disconnect"
                   onPress={onDisconnect}
+                />
+              ) : null}
+              {!connected && lastAuthUrl ? (
+                <SecondaryButton
+                  label="Open login link"
+                  onPress={onOpenAuthUrl}
                 />
               ) : null}
             </View>

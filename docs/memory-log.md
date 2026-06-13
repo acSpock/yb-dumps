@@ -12,6 +12,13 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 - Because Expo injects `EXPO_PUBLIC_*` values at bundle time, restart Expo with cache clear after changing this value.
 - The app can now test Settings -> Connect Instagram against the live Render OAuth start URL instead of a localhost API.
 
+### Mobile OAuth UX Fix
+
+- Settings now displays the active API base URL so stale localhost bundles are obvious.
+- Native iOS/Android Connect Instagram now closes the Settings modal, opens the Render OAuth URL with `Linking.openURL`, and listens for the `instagram-callback` deep link to refresh connection status.
+- Web keeps the Expo auth-session flow.
+- Settings exposes an `Open login link` fallback after the first connect attempt if the native browser does not appear.
+
 ## 2026-06-13 - GitHub Repo Consolidated At Parent Root
 
 ### Repo Decision
