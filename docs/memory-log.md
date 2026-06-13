@@ -2,6 +2,16 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - Render API Live For Local Mobile Testing
+
+### Deployment Decision
+
+- The MVP Instagram API backend is live at `https://yb-dumps-api.onrender.com`.
+- `GET /health` returns `{"ok":true,"metaConfigured":true}`, confirming the Render service is reachable and Meta env vars are configured.
+- Local Expo testing should use `apps/mobile/.env` with `EXPO_PUBLIC_API_BASE_URL=https://yb-dumps-api.onrender.com`.
+- Because Expo injects `EXPO_PUBLIC_*` values at bundle time, restart Expo with cache clear after changing this value.
+- The app can now test Settings -> Connect Instagram against the live Render OAuth start URL instead of a localhost API.
+
 ## 2026-06-13 - GitHub Repo Consolidated At Parent Root
 
 ### Repo Decision
