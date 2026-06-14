@@ -2,6 +2,60 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - CPU-First Real Image Analysis Pipeline
+
+### Product/Architecture Decision
+
+- CPU-first on Render is the current model path. GPU/Modal remains a later upgrade if latency or embedding quality is not enough.
+- Mobile uploads resized max-1024px JPEG analysis copies, not originals. Original selected photos stay on the phone.
+- Uploaded analysis images are temporary and deleted after job completion or failure.
+- The current `/analysis/rank` composer remains the final ranking/composition layer and metadata-only fallback.
+- The first CPU model slice prioritizes duplicate removal, best-frame quality selection, carousel variety, and feed-fit color/profile signals.
+- Heavy ONNX/Transformers embeddings are intentionally deferred. The implemented hook is `visualEmbedding`, backed today by lightweight pixel-derived vectors.
+
+### Implementation Done
+
+- Added `expo-image-manipulator` to `apps/mobile`.
+- Added `sharp` to `services/api`.
+- Added `services/api/src/cpuVision.ts`:
+  - decodes resized images
+  - computes dHash-style perceptual hashes
+  - scores brightness, contrast, saturation, warmth, sharpness, exposure, noise, and center bias
+  - produces lightweight 32-dimensional visual embeddings
+  - emits model labels such as `landscape`, `portrait`, `warm`, `bright`, `low_light`, `colorful`, `high_contrast`, and `soft_focus`
+- Added file-backed analysis jobs in `services/api/src/analysisJobs.ts`.
+- Added API endpoints:
+  - `POST /analysis/jobs`
+  - `POST /analysis/jobs/:jobId/assets`
+  - `POST /analysis/jobs/:jobId/start`
+  - `GET /analysis/jobs/:jobId`
+  - `GET /analysis/jobs/:jobId/result`
+- Expanded analysis contracts with `perceptualHash`, `visualEmbedding`, `modelLabels`, and `modelQualitySignals`.
+- Updated `services/api/src/modelRanker.ts`:
+  - returns `cpu-vision-curation-v0.1.0` when CPU features are present
+  - uses `visualEmbedding` before metadata fallback embeddings
+  - uses perceptual hashes for exact/near duplicate grouping
+  - merges model quality signals into quality scoring and flags
+- Updated `apps/mobile/src/services/analysisApi.ts` so normal generation tries:
+  - CPU analysis job with resized image uploads
+  - server metadata `/analysis/rank` fallback
+  - local `buildRankingResult` fallback
+- Updated analysis progress copy in `apps/mobile/App.tsx` to explain resized analysis copies and CPU vision honestly.
+
+### Validation
+
+- `npm run typecheck` passes in `services/api`.
+- `npm run typecheck` passes in `apps/mobile`.
+- `npm test` passes in `services/api` outside the sandbox, where localhost binding is allowed.
+- Tests cover CPU hash/embedding generation, sharpness/contrast response, perceptual-hash duplicate grouping, model version switching, job upload/start/result flow, and temporary image cleanup.
+
+### Known Gaps
+
+- `/analysis/jobs/:jobId/start` currently runs CPU analysis synchronously inside the request. A real queue/worker should replace this when jobs become large.
+- Feed profile assets still mostly use metadata-derived features; uploading grid screenshots/recent-post image copies for CPU feed profiling is the next obvious quality step.
+- The lightweight `visualEmbedding` is not a neural embedding. ONNX/Transformers.js can be added later behind the same contract.
+- Render free CPU can be slow for hundreds of images, but this path is cheaper and good enough for friend/family MVP testing.
+
 ## 2026-06-13 - Carousel Composer Source-Asset Deduping
 
 ### Product/Architecture Decision

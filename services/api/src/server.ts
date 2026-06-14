@@ -2,6 +2,7 @@ import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 
 import { AnalysisRankRequest } from './analysisContracts.js';
+import { AnalysisJobService, createAnalysisJobService } from './analysisJobs.js';
 import { createMetaClient, MetaClient } from './metaClient.js';
 import { analyzeTripPhotos } from './modelRanker.js';
 import { createOAuthState, decodeOAuthState } from './oauthState.js';
@@ -18,6 +19,7 @@ import { createFileStore, InstagramStore } from './store.js';
 type JsonRecord = Record<string, unknown>;
 
 type AppContext = {
+  analysisJobs?: AnalysisJobService;
   metaClient?: MetaClient;
   metaConfigured: boolean;
   oauthSecret: string;
@@ -267,11 +269,71 @@ async function routeAnalysisRank(response: ServerResponse, request: IncomingMess
   sendJson(response, 200, result);
 }
 
+async function routeCreateAnalysisJob(
+  response: ServerResponse,
+  request: IncomingMessage,
+  analysisJobs: AnalysisJobService,
+) {
+  const body = await readJsonBody(request);
+  const job = await analysisJobs.createJob({
+    feedProfile: isRecord(body.feedProfile) ? body.feedProfile as AnalysisRankRequest['feedProfile'] : undefined,
+    jobId: typeof body.jobId === 'string' ? body.jobId : undefined,
+    options: isRecord(body.options) ? body.options as AnalysisRankRequest['options'] : undefined,
+    photos: Array.isArray(body.photos) ? body.photos as AnalysisRankRequest['photos'] : [],
+    projectId: requiredString(body.projectId, 'projectId'),
+  });
+
+  sendJson(response, 201, job);
+}
+
+async function routeUploadAnalysisAsset(
+  response: ServerResponse,
+  request: IncomingMessage,
+  analysisJobs: AnalysisJobService,
+  jobId: string,
+) {
+  const body = await readJsonBody(request);
+  const job = await analysisJobs.saveAsset(jobId, {
+    imageBase64: requiredString(body.imageBase64, 'imageBase64'),
+    mimeType: typeof body.mimeType === 'string' ? body.mimeType : undefined,
+    photoId: requiredString(body.photoId, 'photoId'),
+  });
+
+  sendJson(response, 200, job);
+}
+
+async function routeStartAnalysisJob(
+  response: ServerResponse,
+  analysisJobs: AnalysisJobService,
+  jobId: string,
+) {
+  const result = await analysisJobs.startJob(jobId);
+  sendJson(response, 200, result);
+}
+
+async function routeGetAnalysisJob(
+  response: ServerResponse,
+  analysisJobs: AnalysisJobService,
+  jobId: string,
+) {
+  sendJson(response, 200, await analysisJobs.getJob(jobId));
+}
+
+async function routeGetAnalysisJobResult(
+  response: ServerResponse,
+  analysisJobs: AnalysisJobService,
+  jobId: string,
+) {
+  sendJson(response, 200, await analysisJobs.getResult(jobId));
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function createApiServer(context: AppContext) {
+  const analysisJobs = context.analysisJobs ?? createAnalysisJobService(config.analysisDataDir);
+
   return http.createServer((request, response) => {
     void (async () => {
       if (request.method === 'OPTIONS') {
@@ -322,6 +384,38 @@ export function createApiServer(context: AppContext) {
       if (request.method === 'POST' && url.pathname === '/analysis/rank') {
         await routeAnalysisRank(response, request);
         return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/analysis/jobs') {
+        await routeCreateAnalysisJob(response, request, analysisJobs);
+        return;
+      }
+
+      const analysisJobMatch = /^\/analysis\/jobs\/([^/]+)(?:\/([^/]+))?$/.exec(url.pathname);
+
+      if (analysisJobMatch) {
+        const jobId = decodeURIComponent(analysisJobMatch[1] ?? '');
+        const action = analysisJobMatch[2];
+
+        if (request.method === 'POST' && action === 'assets') {
+          await routeUploadAnalysisAsset(response, request, analysisJobs, jobId);
+          return;
+        }
+
+        if (request.method === 'POST' && action === 'start') {
+          await routeStartAnalysisJob(response, analysisJobs, jobId);
+          return;
+        }
+
+        if (request.method === 'GET' && action === 'result') {
+          await routeGetAnalysisJobResult(response, analysisJobs, jobId);
+          return;
+        }
+
+        if (request.method === 'GET' && !action) {
+          await routeGetAnalysisJob(response, analysisJobs, jobId);
+          return;
+        }
       }
 
       sendJson(response, 404, { message: 'Not found.' });

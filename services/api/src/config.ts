@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export type Config = {
+  analysisDataDir: string;
   apiPublicUrl: string;
   instagramScopes: string[];
   metaAppId?: string;
@@ -49,6 +50,7 @@ export function readConfig(): Config {
   const apiPublicUrl = (process.env.API_PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, '');
 
   return {
+    analysisDataDir: process.env.ANALYSIS_DATA_DIR ?? path.resolve(process.cwd(), 'data', 'analysis-jobs'),
     apiPublicUrl,
     instagramScopes: (process.env.INSTAGRAM_SCOPES ?? 'instagram_business_basic,instagram_business_content_publish')
       .split(',')

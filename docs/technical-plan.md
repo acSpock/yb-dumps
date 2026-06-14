@@ -45,6 +45,7 @@ Current prototype dependencies:
 - React Native
 - TypeScript
 - `expo-image-picker`
+- `expo-image-manipulator`
 - `@react-native-async-storage/async-storage`
 - `expo-auth-session`
 - `expo-web-browser`
@@ -57,7 +58,11 @@ Current prototype dependencies:
 
 Current analysis flow:
 
-- `apps/mobile/src/services/analysisApi.ts` calls `POST /analysis/rank` on `EXPO_PUBLIC_API_BASE_URL`.
+- `apps/mobile/src/services/analysisApi.ts` tries the CPU analysis job flow first on `EXPO_PUBLIC_API_BASE_URL`.
+- Mobile creates max-1024px JPEG analysis copies with `expo-image-manipulator` and uploads those temporary copies to the API.
+- Originals stay on the phone.
+- The API deletes temporary analysis images after job success or failure.
+- If CPU job creation/start fails, mobile falls back to `POST /analysis/rank`.
 - Mobile sends photo metadata, deterministic prototype labels/color signals/quality signals, feed-import assets when available, and ranking options.
 - The server returns the app-facing `RankingResult` and mobile persists it into the local saved-trip snapshot.
 - `buildRankingResult` remains the local fallback if the deployed API is asleep, unreachable, or returns an error.
@@ -65,7 +70,6 @@ Current analysis flow:
 Likely next dependencies:
 
 - Expo Router, once screens split out of the single-file prototype.
-- `expo-image-manipulator` for resized analysis copies.
 - `expo-file-system` for staged upload files.
 - A performant grid/list library before real 1,000-photo selection views.
 
@@ -75,8 +79,15 @@ Keep boring:
 
 - Local Node/TypeScript API scaffold now exists under `services/api`.
 - Current service uses a dependency-free Node HTTP server for Meta OAuth, Instagram feed import, and guarded publish calls.
-- Current service also exposes `POST /analysis/rank` for the first server-side ranking/composition prototype.
+- Current service exposes metadata fallback ranking plus CPU analysis jobs:
+  - `POST /analysis/rank`
+  - `POST /analysis/jobs`
+  - `POST /analysis/jobs/:jobId/assets`
+  - `POST /analysis/jobs/:jobId/start`
+  - `GET /analysis/jobs/:jobId`
+  - `GET /analysis/jobs/:jobId/result`
 - Dev token storage is a gitignored JSON file under `services/api/data`.
+- Temporary analysis images live under `services/api/data/analysis-jobs` by default and are deleted after completion.
 - Production backend should still move to Postgres, object storage for uploaded/rendered images, and a queue for model jobs.
 
 Core tables:
@@ -113,11 +124,14 @@ Server-side first:
 Current implementation:
 
 - `services/api/src/analysisContracts.ts` defines the API-side ranking/result contract.
-- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0`.
+- `services/api/src/cpuVision.ts` implements `sharp`-based CPU feature extraction.
+- `services/api/src/analysisJobs.ts` implements file-backed MVP analysis jobs.
+- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0` and `cpu-vision-curation-v0.1.0`.
 - `POST /analysis/rank` accepts metadata, labels, color profiles, optional embeddings, optional quality/aesthetic signals, and optional feed-profile assets.
-- The current ranker is intentionally deterministic:
+- The job flow accepts resized JPEG analysis images and enriches photo inputs with `perceptualHash`, `visualEmbedding`, `modelLabels`, and `modelQualitySignals`.
+- The current ranker/composer is intentionally deterministic:
   - score quality, aesthetics, coverage, and feed fit
-  - detect near-duplicate/burst groups from embeddings plus moment/time proximity
+  - detect exact/near duplicates from source ids, perceptual hashes, embeddings, and moment/time proximity
   - select a diverse top pool using relevance plus novelty/diversity constraints
   - compose up to 3 carousel variations capped at 20 slides
   - prefer landscape/square photos for stacked `vertical_triptych` templates
@@ -251,12 +265,13 @@ Defaults:
 
 ### Milestone 2: Real Upload And Jobs
 
-- Create project.
-- Register selected assets.
-- Generate resized analysis copies.
-- Upload via signed URLs.
-- Poll analysis job.
-- Render returned carousel/feed results.
+- Create project: still local/mobile-first.
+- Register selected assets: still local/mobile-first.
+- Generate resized analysis copies: implemented with `expo-image-manipulator`.
+- Upload analysis assets: implemented through JSON base64 MVP endpoint; signed URLs/object storage should replace this later.
+- Start analysis job: implemented synchronously in API request; queue/worker should replace this later.
+- Poll analysis job: endpoint exists, but mobile currently waits for synchronous `start` result.
+- Render returned carousel/feed results: implemented through existing `RankingResult`.
 
 ### Milestone 3: Ranking And Composition Prototype
 

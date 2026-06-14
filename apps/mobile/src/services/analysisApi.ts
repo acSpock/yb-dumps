@@ -1,5 +1,8 @@
+import * as ImageManipulator from 'expo-image-manipulator';
+
 import {
   FeedImportState,
+  AnalysisJob,
   RankingResult,
   TripPhoto,
 } from '../types';
@@ -37,6 +40,22 @@ type FeedProfileAssetInput = {
   height?: number;
   labels: string[];
   colorProfile: AnalysisColorProfile;
+};
+
+type AnalysisJobResponse = Omit<AnalysisJob, 'stage'> & {
+  stage: AnalysisJob['stage'] | 'created' | 'uploads' | 'cpu_vision' | 'cleanup';
+};
+
+type AnalysisJobStartResponse = {
+  job: AnalysisJobResponse;
+  result?: RankingResult;
+};
+
+export type CpuAnalysisResponse = {
+  job: AnalysisJobResponse;
+  result: RankingResult;
+  uploadedAssetCount: number;
+  usedCpuVision: boolean;
 };
 
 const labelsByMoment: Record<string, string[]> = {
@@ -163,40 +182,181 @@ function feedAssetInput(asset: FeedImportState['assets'][number], index: number)
   };
 }
 
-export async function rankTripPhotos(input: {
+function analysisRequestBody(input: {
   feedImport?: FeedImportState;
   jobId: string;
   photos: TripPhoto[];
   projectId: string;
-}): Promise<RankingResult> {
-  const response = await fetch(`${API_BASE_URL}/analysis/rank`, {
-    body: JSON.stringify({
-      feedProfile: input.feedImport?.assets.length
-        ? {
-          assets: input.feedImport.assets.map(feedAssetInput),
-          feedProfileId: `${input.projectId}-feed-profile`,
-        }
-        : undefined,
-      jobId: input.jobId,
-      options: {
-        carouselMaxSlides: 20,
-        topPoolSize: 50,
-        variationCount: 3,
-      },
-      photos: input.photos.map(photoInput),
-      projectId: input.projectId,
-    }),
+}) {
+  return {
+    feedProfile: input.feedImport?.assets.length
+      ? {
+        assets: input.feedImport.assets.map(feedAssetInput),
+        feedProfileId: `${input.projectId}-feed-profile`,
+      }
+      : undefined,
+    jobId: input.jobId,
+    options: {
+      carouselMaxSlides: 20,
+      topPoolSize: 50,
+      variationCount: 3,
+    },
+    photos: input.photos.map(photoInput),
+    projectId: input.projectId,
+  };
+}
+
+function jsonBody<T>(text: string) {
+  return text ? JSON.parse(text) as T & { message?: string; error?: string } : {} as T & { message?: string; error?: string };
+}
+
+async function fetchJson<T>(path: string, init?: RequestInit) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
     headers: {
       'content-type': 'application/json',
+      ...(init?.headers ?? {}),
     },
-    method: 'POST',
   });
   const text = await response.text();
-  const body = text ? JSON.parse(text) as RankingResult & { message?: string; error?: string } : {} as RankingResult & { message?: string; error?: string };
+  const body = jsonBody<T>(text);
 
   if (!response.ok) {
     throw new InstagramApiError(body.message ?? body.error ?? 'Analysis request failed.', response.status);
   }
 
   return body;
+}
+
+function uploadableUriForPhoto(photo: TripPhoto) {
+  const uri = photo.localUri ?? photo.thumbnailUri ?? '';
+
+  if (
+    uri.startsWith('file://') ||
+    uri.startsWith('ph://') ||
+    uri.startsWith('assets-library://') ||
+    uri.startsWith('data:image/')
+  ) {
+    return uri;
+  }
+
+  return '';
+}
+
+function resizeActionForPhoto(photo: TripPhoto): ImageManipulator.Action[] {
+  const maxDimension = Math.max(photo.width, photo.height);
+
+  if (maxDimension <= 1024) {
+    return [];
+  }
+
+  if (photo.width >= photo.height) {
+    return [{ resize: { width: 1024 } }];
+  }
+
+  return [{ resize: { height: 1024 } }];
+}
+
+async function createAnalysisCopy(photo: TripPhoto) {
+  const uri = uploadableUriForPhoto(photo);
+
+  if (!uri) {
+    return undefined;
+  }
+
+  const result = await ImageManipulator.manipulateAsync(
+    uri,
+    resizeActionForPhoto(photo),
+    {
+      base64: true,
+      compress: 0.72,
+      format: ImageManipulator.SaveFormat.JPEG,
+    },
+  );
+
+  if (!result.base64) {
+    throw new Error(`Could not create analysis copy for ${photo.originalFilename ?? photo.photoId}.`);
+  }
+
+  return {
+    base64: result.base64,
+    mimeType: 'image/jpeg',
+  };
+}
+
+async function uploadAnalysisAsset(jobId: string, photo: TripPhoto) {
+  const analysisCopy = await createAnalysisCopy(photo);
+
+  if (!analysisCopy) {
+    return false;
+  }
+
+  await fetchJson<AnalysisJobResponse>(`/analysis/jobs/${encodeURIComponent(jobId)}/assets`, {
+    body: JSON.stringify({
+      imageBase64: analysisCopy.base64,
+      mimeType: analysisCopy.mimeType,
+      photoId: photo.photoId,
+    }),
+    method: 'POST',
+  });
+
+  return true;
+}
+
+export async function rankTripPhotos(input: {
+  feedImport?: FeedImportState;
+  jobId: string;
+  photos: TripPhoto[];
+  projectId: string;
+}): Promise<RankingResult> {
+  return fetchJson<RankingResult>('/analysis/rank', {
+    body: JSON.stringify(analysisRequestBody(input)),
+    method: 'POST',
+  });
+}
+
+export async function rankTripPhotosWithCpuJob(input: {
+  feedImport?: FeedImportState;
+  jobId: string;
+  photos: TripPhoto[];
+  projectId: string;
+}): Promise<CpuAnalysisResponse> {
+  const job = await fetchJson<AnalysisJobResponse>('/analysis/jobs', {
+    body: JSON.stringify(analysisRequestBody(input)),
+    method: 'POST',
+  });
+  let uploadedAssetCount = 0;
+
+  for (const photo of input.photos) {
+    try {
+      if (await uploadAnalysisAsset(job.jobId, photo)) {
+        uploadedAssetCount += 1;
+      }
+    } catch {
+      // Keep the batch moving; the API will rank this photo from metadata if its analysis copy failed.
+    }
+  }
+
+  const started = await fetchJson<AnalysisJobStartResponse>(`/analysis/jobs/${encodeURIComponent(job.jobId)}/start`, {
+    body: JSON.stringify({}),
+    method: 'POST',
+  });
+
+  if (started.result) {
+    return {
+      job: started.job,
+      result: started.result,
+      uploadedAssetCount,
+      usedCpuVision: started.result.modelVersion.startsWith('cpu-vision'),
+    };
+  }
+
+  const result = await fetchJson<RankingResult>(`/analysis/jobs/${encodeURIComponent(job.jobId)}/result`);
+
+  return {
+    job: started.job,
+    result,
+    uploadedAssetCount,
+    usedCpuVision: result.modelVersion.startsWith('cpu-vision'),
+  };
 }

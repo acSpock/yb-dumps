@@ -19,6 +19,7 @@ export type AnalysisQualitySignals = {
   eyesOpen?: number;
   smile?: number;
   subjectCentered?: number;
+  contrast?: number;
 };
 
 export type AnalysisPhotoInput = {
@@ -35,6 +36,10 @@ export type AnalysisPhotoInput = {
   qualitySignals?: AnalysisQualitySignals;
   embedding?: number[];
   aestheticScore?: number;
+  perceptualHash?: string;
+  visualEmbedding?: number[];
+  modelLabels?: string[];
+  modelQualitySignals?: AnalysisQualitySignals;
 };
 
 export type FeedProfileAssetInput = {
@@ -44,6 +49,9 @@ export type FeedProfileAssetInput = {
   labels?: string[];
   colorProfile?: AnalysisColorProfile;
   embedding?: number[];
+  perceptualHash?: string;
+  visualEmbedding?: number[];
+  modelLabels?: string[];
 };
 
 export type FeedProfileInput = {

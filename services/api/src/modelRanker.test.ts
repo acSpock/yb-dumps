@@ -118,6 +118,43 @@ test('dedupes repeated source assets before composing multi-photo slides', () =>
   }
 });
 
+test('dedupes repeated perceptual hashes and returns CPU model version', () => {
+  const result = analyzeTripPhotos(request({
+    photos: [
+      photo({
+        aestheticScore: 0.62,
+        modelQualitySignals: { exposure: 0.72, sharpness: 0.48 },
+        perceptualHash: 'ff00ff00ff00ff00',
+        photoId: 'hash-soft',
+        visualEmbedding: [1, 0, 0, 0],
+      }),
+      photo({
+        aestheticScore: 0.9,
+        modelQualitySignals: { exposure: 0.86, sharpness: 0.94 },
+        perceptualHash: 'ff00ff00ff00ff00',
+        photoId: 'hash-best',
+        visualEmbedding: [1, 0, 0.001, 0],
+      }),
+      photo({
+        labels: ['food', 'detail'],
+        momentId: 'moment-2',
+        perceptualHash: '00ff00ff00ff00ff',
+        photoId: 'different-frame',
+        visualEmbedding: [0, 1, 0, 0],
+      }),
+    ],
+    options: {
+      topPoolSize: 3,
+    },
+  }));
+
+  assert.equal(result.modelVersion, 'cpu-vision-curation-v0.1.0');
+  assert.equal(result.duplicateGroups.length, 1);
+  assert.equal(result.duplicateGroups[0]?.bestPhotoId, 'hash-best');
+  assert.ok(result.duplicateGroups[0]?.reasonCodes.includes('perceptual_hash'));
+  assert.equal(result.topPicks.some((pick) => pick.photoId === 'hash-soft'), false);
+});
+
 test('composes carousels under the 20-slide Instagram limit and prefers landscape photos for stacked templates', () => {
   const photos = Array.from({ length: 34 }, (_, index) => {
     const isLandscapeMoment = index < 8;

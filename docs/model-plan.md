@@ -146,20 +146,34 @@ Move selective pieces on-device later:
 - obvious duplicate detection
 - possibly a compact aesthetic/personal ranker
 
-## Implemented Prototype
+## Implemented CPU-First Pipeline
 
-The first server-side prototype is implemented in `services/api` rather than a separate worker process:
+The current server-side prototype is implemented in `services/api` rather than a separate worker process:
 
 - `POST /analysis/rank`
+- `POST /analysis/jobs`
+- `POST /analysis/jobs/:jobId/assets`
+- `POST /analysis/jobs/:jobId/start`
+- `GET /analysis/jobs/:jobId`
+- `GET /analysis/jobs/:jobId/result`
 - `services/api/src/analysisContracts.ts`
+- `services/api/src/analysisJobs.ts`
+- `services/api/src/cpuVision.ts`
 - `services/api/src/modelRanker.ts`
 
-This is `heuristic-curation-v0.1.0`. It is not a trained neural model yet. It is the orchestration layer that a real model worker will feed:
+There are now two model versions:
+
+- `heuristic-curation-v0.1.0` for metadata-only `/analysis/rank`.
+- `cpu-vision-curation-v0.1.0` when resized image uploads produce CPU pixel features.
+
+The CPU path is not a trained neural model yet. It is a cheaper first step that feeds better real-image features into the same ranking/composition layer:
 
 - accepts optional neural embeddings per photo
 - accepts optional quality/aesthetic model scores
 - falls back to deterministic metadata/label/color features when those model outputs are missing
-- groups duplicate bursts
+- computes perceptual hashes for exact/near duplicate grouping
+- computes blur/exposure/color features with `sharp`
+- computes lightweight `visualEmbedding` vectors from pixel histograms and image grids
 - picks a diverse top pool
 - composes carousel variations capped at Instagram's 20-slide limit
 - prefers horizontal photos for stacked layered templates
@@ -167,5 +181,7 @@ This is `heuristic-curation-v0.1.0`. It is not a trained neural model yet. It is
 
 Next model step:
 
-- Add an inference worker that produces CLIP/DINO-style embeddings and NIMA-style quality/aesthetic signals.
+- Add an async worker/queue instead of synchronous `start`.
+- Add CLIP/DINO-style embeddings and NIMA-style quality/aesthetic signals behind the existing `visualEmbedding`/model-signal contract.
+- Add CPU feed-image analysis for imported grid screenshots/recent posts.
 - Keep `/analysis/rank` as the composition/ranking layer so the mobile app contract stays stable.

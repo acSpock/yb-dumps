@@ -16,7 +16,8 @@ import {
   RankingResult,
 } from './analysisContracts.js';
 
-const MODEL_VERSION = 'heuristic-curation-v0.1.0';
+const HEURISTIC_MODEL_VERSION = 'heuristic-curation-v0.1.0';
+const CPU_VISION_MODEL_VERSION = 'cpu-vision-curation-v0.1.0';
 const EMBEDDING_SIZE = 32;
 const DEFAULT_TOP_POOL_SIZE = 50;
 const DEFAULT_CAROUSEL_MAX_SLIDES = 20;
@@ -148,8 +149,13 @@ function cropHintFor(orientation: Orientation): CropHint {
 }
 
 function labelsFor(photo: AnalysisPhotoInput, orientation: Orientation) {
-  const labels = new Set((photo.labels ?? []).map((label) => label.trim().toLowerCase()).filter(Boolean));
-  const faceCount = photo.qualitySignals?.faceCount ?? photo.peopleIds?.length ?? 0;
+  const labels = new Set(
+    [...(photo.labels ?? []), ...(photo.modelLabels ?? [])]
+      .map((label) => label.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const qualitySignals = mergedQualitySignalsFor(photo);
+  const faceCount = qualitySignals.faceCount ?? photo.peopleIds?.length ?? 0;
 
   if (faceCount > 0) {
     labels.add(faceCount >= 3 ? 'group' : 'people');
@@ -195,7 +201,18 @@ function embeddingFor(photo: AnalysisPhotoInput, labels: string[], colorProfile:
     return normalizeVector(photo.embedding.map((value) => (Number.isFinite(value) ? value : 0)));
   }
 
+  if (photo.visualEmbedding?.length) {
+    return normalizeVector(photo.visualEmbedding.map((value) => (Number.isFinite(value) ? value : 0)));
+  }
+
   return fallbackEmbedding(photo, labels, colorProfile);
+}
+
+function mergedQualitySignalsFor(photo: AnalysisPhotoInput): AnalysisQualitySignals {
+  return {
+    ...photo.qualitySignals,
+    ...photo.modelQualitySignals,
+  };
 }
 
 function scoreQuality(
@@ -266,15 +283,16 @@ function createFeatures(photos: AnalysisPhotoInput[]) {
     const orientation = orientationFor(photo);
     const sceneLabels = labelsFor(photo, orientation);
     const colorProfile = normalizedColorProfile(photo.colorProfile);
-    const qualityScore = scoreQuality(photo, colorProfile, photo.qualitySignals);
+    const qualitySignals = mergedQualitySignalsFor(photo);
+    const qualityScore = scoreQuality(photo, colorProfile, qualitySignals);
     const aestheticScore = scoreAesthetic(photo, colorProfile, qualityScore);
     const momentSize = momentCounts.get(photo.momentId ?? 'moment-unknown') ?? 1;
     const labelRarity = average(sceneLabels.map((label) => 1 / Math.sqrt(labelCounts.get(label) ?? 1)), 0.5);
     const coverageScore = clamp(0.45 + 0.24 / Math.sqrt(momentSize) + 0.31 * labelRarity);
-    const faceCount = photo.qualitySignals?.faceCount ?? photo.peopleIds?.length ?? 0;
+    const faceCount = qualitySignals.faceCount ?? photo.peopleIds?.length ?? 0;
     const peopleBonus = faceCount > 0 ? 0.035 : 0;
     const finalScore = clamp(qualityScore * 0.43 + aestheticScore * 0.36 + coverageScore * 0.21 + peopleBonus);
-    const qualityFlags = qualityFlagsFor(photo, qualityScore, colorProfile);
+    const qualityFlags = qualityFlagsFor(photo, qualityScore, colorProfile, qualitySignals);
 
     return {
       photo,
@@ -299,6 +317,7 @@ function qualityFlagsFor(
   photo: AnalysisPhotoInput,
   qualityScore: number,
   colorProfile: Required<AnalysisColorProfile>,
+  qualitySignals: AnalysisQualitySignals = mergedQualitySignalsFor(photo),
 ) {
   const flags: string[] = [];
 
@@ -306,7 +325,7 @@ function qualityFlagsFor(
     flags.push('low_quality');
   }
 
-  if (safeNumber(photo.qualitySignals?.sharpness, 0.72) < 0.45) {
+  if (safeNumber(qualitySignals.sharpness, 0.72) < 0.45) {
     flags.push('soft_focus');
   }
 
@@ -350,6 +369,45 @@ function sameSourceAsset(left: PhotoFeature, right: PhotoFeature) {
   return Boolean(leftSourceAssetId && rightSourceAssetId && leftSourceAssetId === rightSourceAssetId);
 }
 
+function normalizedHash(value?: string) {
+  const hash = value?.trim().toLowerCase() ?? '';
+  return /^[0-9a-f]+$/.test(hash) ? hash : '';
+}
+
+function hexHammingDistance(left: string, right: string) {
+  const leftHash = normalizedHash(left);
+  const rightHash = normalizedHash(right);
+
+  if (!leftHash || !rightHash || leftHash.length !== rightHash.length) {
+    return undefined;
+  }
+
+  let distance = 0;
+
+  for (let index = 0; index < leftHash.length; index += 1) {
+    const leftNibble = Number.parseInt(leftHash[index] ?? '0', 16);
+    const rightNibble = Number.parseInt(rightHash[index] ?? '0', 16);
+    distance += ((leftNibble ^ rightNibble).toString(2).match(/1/g) ?? []).length;
+  }
+
+  return distance;
+}
+
+function perceptualHashMatch(left: PhotoFeature, right: PhotoFeature) {
+  const distance = hexHammingDistance(left.photo.perceptualHash ?? '', right.photo.perceptualHash ?? '');
+
+  if (distance === undefined) {
+    return undefined;
+  }
+
+  return {
+    confidence: clamp(1 - distance / 18, 0.55, 1),
+    distance,
+    near: distance <= 8,
+    exact: distance <= 1,
+  };
+}
+
 function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt: string) {
   const duplicateGroups: DuplicateGroup[] = [];
   const assigned = new Set<string>();
@@ -367,12 +425,17 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
       }
 
       const sourceAssetMatch = sameSourceAsset(feature, candidate);
+      const hashMatch = perceptualHashMatch(feature, candidate);
       const similarity = cosineSimilarity(feature.embedding, candidate.embedding);
       const sameMoment = (feature.photo.momentId ?? '') === (candidate.photo.momentId ?? '');
       const closeTime = areCloseInTime(feature, candidate, 90_000);
-      const exactEmbedding = Boolean(feature.photo.embedding?.length && candidate.photo.embedding?.length && similarity > 0.985);
+      const hasModelEmbeddings = Boolean(
+        (feature.photo.embedding?.length || feature.photo.visualEmbedding?.length) &&
+          (candidate.photo.embedding?.length || candidate.photo.visualEmbedding?.length),
+      );
+      const exactEmbedding = hasModelEmbeddings && similarity > 0.985;
 
-      if (sourceAssetMatch || exactEmbedding || similarity > 0.975 || (similarity > 0.91 && sameMoment && closeTime)) {
+      if (sourceAssetMatch || hashMatch?.near || exactEmbedding || similarity > 0.975 || (similarity > 0.91 && sameMoment && closeTime)) {
         group.push(candidate);
       }
     }
@@ -390,14 +453,25 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
 
     const groupId = `dup-${duplicateGroups.length + 1}`;
     const hasSourceAssetMatch = group.some((item) => item.photo.photoId !== feature.photo.photoId && sameSourceAsset(feature, item));
+    const hashMatches = group
+      .slice(1)
+      .map((item) => perceptualHashMatch(feature, item))
+      .filter((match): match is NonNullable<ReturnType<typeof perceptualHashMatch>> => Boolean(match));
+    const hasExactHashMatch = hashMatches.some((match) => match.exact);
+    const hasNearHashMatch = hashMatches.some((match) => match.near);
     const averageSimilarity = average(group.slice(1).map((item) => cosineSimilarity(feature.embedding, item.embedding)), 0.9);
+    const averageHashConfidence = hashMatches.length
+      ? average(hashMatches.map((match) => match.confidence), 0.85)
+      : undefined;
     const duplicateType = hasSourceAssetMatch
       ? 'exact'
-      : group.every((item) => areCloseInTime(feature, item, 20_000))
-        ? 'burst'
-        : averageSimilarity > 0.985
+      : hasExactHashMatch
+        ? 'exact'
+        : hasNearHashMatch || averageSimilarity > 0.985
           ? 'near'
-          : 'similar';
+          : group.every((item) => areCloseInTime(feature, item, 20_000))
+            ? 'burst'
+            : 'similar';
 
     for (const item of group) {
       item.duplicateGroupId = groupId;
@@ -407,17 +481,18 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
 
     duplicateGroups.push({
       bestPhotoId: bestFeature.photo.photoId,
-      confidence: roundScore(averageSimilarity),
+      confidence: roundScore(averageHashConfidence ?? averageSimilarity),
       createdAt,
       duplicateType,
       groupId,
       photoIds: rankedGroup.map((item) => item.photo.photoId),
       projectId,
-      reasonCodes: duplicateType === 'exact'
-        ? ['source_asset_match']
-        : duplicateType === 'burst'
-          ? ['time_proximity', 'visual_similarity']
-          : ['visual_similarity'],
+      reasonCodes: [
+        ...(hasSourceAssetMatch ? ['source_asset_match'] : []),
+        ...(hasNearHashMatch || hasExactHashMatch ? ['perceptual_hash'] : []),
+        ...(duplicateType === 'burst' ? ['time_proximity'] : []),
+        ...(!hasNearHashMatch && !hasExactHashMatch ? ['visual_similarity'] : []),
+      ],
       representativePhotoId: feature.photo.photoId,
     });
   }
@@ -958,10 +1033,15 @@ function feedAssetEmbedding(asset: FeedProfileAssetInput) {
     return normalizeVector(asset.embedding);
   }
 
+  if (asset.visualEmbedding?.length) {
+    return normalizeVector(asset.visualEmbedding);
+  }
+
   const pseudoPhoto: AnalysisPhotoInput = {
     photoId: asset.id,
     height: asset.height ?? 1200,
     labels: asset.labels,
+    modelLabels: asset.modelLabels,
     width: asset.width ?? 1200,
   };
   const colorProfile = normalizedColorProfile(asset.colorProfile);
@@ -1143,13 +1223,19 @@ function validateRequest(request: AnalysisRankRequest) {
 
 function warningsFor(request: AnalysisRankRequest, features: PhotoFeature[]) {
   const warnings: string[] = [];
+  const hasCpuFeatures = request.photos.some((photo) =>
+    Boolean(photo.perceptualHash || photo.visualEmbedding?.length || photo.modelQualitySignals || photo.modelLabels?.length),
+  );
+  const hasModelEmbeddings = request.photos.some((photo) => photo.embedding?.length || photo.visualEmbedding?.length);
 
   if (request.photos.length < 20) {
     warnings.push('Fewer than 20 photos were provided, so the carousel may be shorter than Instagram maximum length.');
   }
 
-  if (!request.photos.some((photo) => photo.embedding?.length)) {
+  if (!hasModelEmbeddings) {
     warnings.push('No neural embeddings were provided; ranking used deterministic metadata features.');
+  } else if (hasCpuFeatures && !request.photos.some((photo) => photo.embedding?.length)) {
+    warnings.push('CPU vision features were used; neural embeddings are still unavailable in this deployment.');
   }
 
   if (!request.feedProfile?.assets.length) {
@@ -1161,6 +1247,14 @@ function warningsFor(request: AnalysisRankRequest, features: PhotoFeature[]) {
   }
 
   return warnings;
+}
+
+function modelVersionFor(request: AnalysisRankRequest) {
+  return request.photos.some((photo) =>
+    Boolean(photo.perceptualHash || photo.visualEmbedding?.length || photo.modelQualitySignals || photo.modelLabels?.length),
+  )
+    ? CPU_VISION_MODEL_VERSION
+    : HEURISTIC_MODEL_VERSION;
 }
 
 export function analyzeTripPhotos(request: AnalysisRankRequest): RankingResult {
@@ -1182,7 +1276,7 @@ export function analyzeTripPhotos(request: AnalysisRankRequest): RankingResult {
     feedPreviewCandidates: scoreFeedFit(request.projectId, selectedFeatures, feedProfile),
     generatedAt,
     jobId: request.jobId ?? `analysis-${request.projectId}`,
-    modelVersion: MODEL_VERSION,
+    modelVersion: modelVersionFor(request),
     photoScores: photoScoresFor(features),
     projectId: request.projectId,
     resultId: `result-${request.projectId}-${Date.parse(generatedAt)}`,

@@ -27,7 +27,7 @@ import {
 } from 'react-native';
 
 import { buildRankingResult, createProjectFromPickedAssets, createSampleProject } from './src/data/sampleProject';
-import { rankTripPhotos } from './src/services/analysisApi';
+import { rankTripPhotos, rankTripPhotosWithCpuJob } from './src/services/analysisApi';
 import {
   API_BASE_URL,
   disconnectInstagram,
@@ -70,11 +70,12 @@ const disconnectedInstagram: InstagramConnectionState = {
 };
 
 const analysisSteps = [
-  { label: 'Preparing the trip dump', detail: 'Reading selected photos and creating analysis records.' },
-  { label: 'Calling the ranker', detail: 'Sending photo metadata to the server-side curation engine.' },
-  { label: 'Ranking the strongest 50', detail: 'Scoring quality, moments, people, place, and variety.' },
+  { label: 'Preparing analysis copies', detail: 'Creating resized JPEG copies for CPU vision. Originals stay on this device.' },
+  { label: 'Uploading resized copies', detail: 'Sending temporary 1024px analysis files to the server job.' },
+  { label: 'Running CPU vision', detail: 'Measuring blur, exposure, color, perceptual hashes, and visual variety.' },
+  { label: 'Ranking the strongest 50', detail: 'Scoring quality, moments, people, place, duplicates, and variety.' },
   { label: 'Composing carousel options', detail: 'Building finished edits with single-photo and multi-photo slides.' },
-  { label: 'Checking feed preview', detail: 'Finding the photo that fits a warm, low-contrast grid.' },
+  { label: 'Checking feed preview', detail: 'Finding the photo that best fits your imported grid.' },
   { label: 'Packaging choices', detail: 'Creating a small set of options to choose from.' },
 ];
 
@@ -459,18 +460,32 @@ export default function App() {
     const completionTimer = setTimeout(() => {
       void (async () => {
         let result: RankingResult;
-        let completionMessage = 'Server analysis complete. Carousel options were generated from the backend ranker.';
+        let completionMessage = 'CPU analysis complete. Carousel options were generated from pixel-derived features.';
 
         try {
-          result = await rankTripPhotos({
+          const cpuResponse = await rankTripPhotosWithCpuJob({
             feedImport: project.feedImport,
             jobId: project.job.jobId,
             photos: project.photos,
             projectId: project.projectId,
           });
+          result = cpuResponse.result;
+          completionMessage = cpuResponse.usedCpuVision
+            ? `CPU vision complete. Processed ${cpuResponse.uploadedAssetCount} resized analysis ${cpuResponse.uploadedAssetCount === 1 ? 'copy' : 'copies'}; originals stayed on this device.`
+            : 'CPU job completed without image copies, so the backend used metadata fallback ranking.';
         } catch (error) {
-          result = buildRankingResult(project.projectId, project.photos);
-          completionMessage = apiErrorMessage(error, 'Server analysis failed. Used local fallback ranking instead.');
+          try {
+            result = await rankTripPhotos({
+              feedImport: project.feedImport,
+              jobId: project.job.jobId,
+              photos: project.photos,
+              projectId: project.projectId,
+            });
+            completionMessage = apiErrorMessage(error, 'CPU image analysis failed. Used server metadata ranking instead.');
+          } catch (fallbackError) {
+            result = buildRankingResult(project.projectId, project.photos);
+            completionMessage = apiErrorMessage(fallbackError, 'Server analysis failed. Used local fallback ranking instead.');
+          }
         }
 
         if (canceled) {
