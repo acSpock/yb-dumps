@@ -23,6 +23,12 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 - `npm run typecheck` passes in `apps/mobile`.
 - Browser automation was unavailable in this Codex session, and direct curl to the existing Expo server did not connect despite the process listening on `8081`; manual phone verification is still needed for gesture feel.
 
+### Follow-Up Fix
+
+- iOS camera-roll assets may expose `ph://` URIs that render as gray boxes in the standard `Image` component.
+- The picker now hydrates each loaded page through `MediaLibrary.getAssetInfoAsync` and uses `localUri` when available for both preview and import.
+- Range selection now disables normal ScrollView scrolling while active and auto-scrolls near the top/bottom edge so dragging can span multiple rows.
+
 ## 2026-06-13 - Same-Scene Variant Suppression
 
 ### Product/Architecture Decision

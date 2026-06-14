@@ -1703,16 +1703,23 @@ function TripPhotoPickerModal({
 }) {
   const { width } = useWindowDimensions();
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([]);
+  const [assetDisplayUris, setAssetDisplayUris] = useState<Record<string, string>>({});
   const [endCursor, setEndCursor] = useState<string | undefined>();
   const [hasNextPage, setHasNextPage] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [rangeSelecting, setRangeSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedIdsRef = useRef<Set<string>>(new Set());
   const layoutsRef = useRef<Map<string, AssetLayout>>(new Map());
   const dragAnchorIndexRef = useRef<number | null>(null);
   const ignoreNextPressRef = useRef(false);
+  const panResponderActiveRef = useRef(false);
   const gridRef = useRef<View | null>(null);
+  const scrollRef = useRef<ScrollView | null>(null);
   const gridWindowOriginRef = useRef({ x: 0, y: 0 });
+  const scrollYRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const contentHeightRef = useRef(0);
   const tileGap = 4;
   const columnCount = 3;
   const gridWidth = Math.min(width - 32, 560);
@@ -1731,7 +1738,7 @@ function TripPhotoPickerModal({
         assetId: asset.id,
         fileName: asset.filename,
         height: asset.height,
-        uri: asset.uri,
+        uri: assetDisplayUris[asset.id] ?? asset.uri,
         width: asset.width,
       }));
   }
@@ -1742,6 +1749,24 @@ function TripPhotoPickerModal({
     });
   }
 
+  async function hydrateDisplayUris(pageAssets: MediaLibrary.Asset[]) {
+    const entries = await Promise.all(
+      pageAssets.map(async (asset) => {
+        try {
+          const info = await MediaLibrary.getAssetInfoAsync(asset, { shouldDownloadFromNetwork: true });
+          return [asset.id, info.localUri ?? info.uri ?? asset.uri] as const;
+        } catch {
+          return [asset.id, asset.uri] as const;
+        }
+      }),
+    );
+
+    setAssetDisplayUris((currentUris) => ({
+      ...currentUris,
+      ...Object.fromEntries(entries),
+    }));
+  }
+
   async function loadAssets(reset = false) {
     if (loading) {
       return;
@@ -1750,6 +1775,12 @@ function TripPhotoPickerModal({
     setLoading(true);
 
     try {
+      if (reset) {
+        syncSelectedIds([]);
+        layoutsRef.current.clear();
+        setAssetDisplayUris({});
+      }
+
       const page = await MediaLibrary.getAssetsAsync({
         after: reset ? undefined : endCursor,
         first: 180,
@@ -1771,11 +1802,7 @@ function TripPhotoPickerModal({
       });
       setEndCursor(page.endCursor);
       setHasNextPage(page.hasNextPage);
-
-      if (reset) {
-        syncSelectedIds([]);
-        layoutsRef.current.clear();
-      }
+      void hydrateDisplayUris(page.assets);
     } catch (error) {
       Alert.alert('Camera roll could not load', error instanceof Error ? error.message : 'Use the system picker instead.');
     } finally {
@@ -1829,11 +1856,44 @@ function TripPhotoPickerModal({
     return undefined;
   }
 
+  function endRangeSelection() {
+    panResponderActiveRef.current = false;
+    dragAnchorIndexRef.current = null;
+    setRangeSelecting(false);
+  }
+
+  function maybeAutoScroll(windowY: number) {
+    const edgeSize = 78;
+    const viewportHeight = viewportHeightRef.current;
+
+    if (!viewportHeight) {
+      return;
+    }
+
+    const maxScrollY = Math.max(0, contentHeightRef.current - viewportHeight);
+    let nextY = scrollYRef.current;
+
+    if (windowY > viewportHeight - edgeSize) {
+      nextY = Math.min(maxScrollY, scrollYRef.current + 18);
+    } else if (windowY < edgeSize) {
+      nextY = Math.max(0, scrollYRef.current - 18);
+    }
+
+    if (nextY !== scrollYRef.current) {
+      scrollYRef.current = nextY;
+      scrollRef.current?.scrollTo({ y: nextY, animated: false });
+      measureGrid();
+    }
+  }
+
   const panResponder = useMemo(() =>
     PanResponder.create({
+      onStartShouldSetPanResponder: () => dragAnchorIndexRef.current !== null,
+      onStartShouldSetPanResponderCapture: () => dragAnchorIndexRef.current !== null,
       onMoveShouldSetPanResponder: () => dragAnchorIndexRef.current !== null,
       onMoveShouldSetPanResponderCapture: () => dragAnchorIndexRef.current !== null,
       onPanResponderGrant: () => {
+        panResponderActiveRef.current = true;
         measureGrid();
       },
       onPanResponderMove: (_event, gestureState) => {
@@ -1843,6 +1903,7 @@ function TripPhotoPickerModal({
           return;
         }
 
+        maybeAutoScroll(gestureState.moveY);
         const targetIndex = assetIndexAt(gestureState.moveX, gestureState.moveY);
 
         if (targetIndex !== undefined) {
@@ -1850,10 +1911,10 @@ function TripPhotoPickerModal({
         }
       },
       onPanResponderRelease: () => {
-        dragAnchorIndexRef.current = null;
+        endRangeSelection();
       },
       onPanResponderTerminate: () => {
-        dragAnchorIndexRef.current = null;
+        endRangeSelection();
       },
     }),
   [assets]);
@@ -1906,9 +1967,18 @@ function TripPhotoPickerModal({
         <Text style={styles.tripPickerHint}>Long-press a photo, then drag across nearby photos to select a range.</Text>
 
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.tripPickerScroll}
+          scrollEnabled={!rangeSelecting}
           scrollEventThrottle={16}
-          onScroll={() => measureGrid()}
+          onContentSizeChange={(_contentWidth, contentHeight) => {
+            contentHeightRef.current = contentHeight;
+          }}
+          onScroll={(event) => {
+            scrollYRef.current = event.nativeEvent.contentOffset.y;
+            viewportHeightRef.current = event.nativeEvent.layoutMeasurement.height;
+            measureGrid();
+          }}
         >
           <View
             ref={gridRef}
@@ -1936,7 +2006,13 @@ function TripPhotoPickerModal({
                     measureGrid();
                     ignoreNextPressRef.current = true;
                     dragAnchorIndexRef.current = index;
+                    setRangeSelecting(true);
                     selectRange(index, index);
+                  }}
+                  onPressOut={() => {
+                    if (dragAnchorIndexRef.current !== null && !panResponderActiveRef.current) {
+                      endRangeSelection();
+                    }
                   }}
                   onPress={() => {
                     if (ignoreNextPressRef.current) {
@@ -1957,9 +2033,14 @@ function TripPhotoPickerModal({
                   ]}
                 >
                   <Image
-                    source={{ uri: asset.uri }}
+                    source={{ uri: assetDisplayUris[asset.id] ?? asset.uri }}
                     style={styles.tripPickerImage}
                   />
+                  {!assetDisplayUris[asset.id] ? (
+                    <View style={styles.tripPickerLoadingCover}>
+                      <Text style={styles.tripPickerLoadingText}>Loading</Text>
+                    </View>
+                  ) : null}
                   {selected ? (
                     <View style={styles.tripPickerCheck}>
                       <Text style={styles.tripPickerCheckText}>{selectedIds.indexOf(asset.id) + 1}</Text>
@@ -3505,6 +3586,21 @@ const styles = StyleSheet.create({
   tripPickerImage: {
     width: '100%',
     height: '100%',
+  },
+  tripPickerLoadingCover: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    backgroundColor: 'rgba(244, 246, 248, 0.82)',
+    paddingVertical: 4,
+  },
+  tripPickerLoadingText: {
+    color: '#66717E',
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
   tripPickerCheck: {
     position: 'absolute',
