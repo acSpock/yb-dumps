@@ -2,6 +2,27 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - Drag-Range Trip Photo Picker
+
+### Product/Architecture Decision
+
+- The system image picker is too slow for large trip dumps because users must tap every photo individually.
+- Trip import now starts with a custom camera-roll picker backed by `expo-media-library`.
+- The native system picker remains as a fallback for web, unavailable MediaLibrary states, or platform edge cases.
+- Selection should support large contiguous time-frame batches: tap individual photos, long-press and drag across nearby photos to range-select, load more recent assets, or quickly select the newest 100 loaded photos.
+
+### Implementation Done
+
+- Added `TripPhotoPickerModal` in `apps/mobile/App.tsx`.
+- `Choose trip photos` now opens the custom picker when MediaLibrary is available.
+- The picker loads photos newest-first in pages of 180, tracks selected order, supports tap toggle, long-press drag range selection, `Newest 100`, `Clear`, `Load more`, and `System picker`.
+- Confirming selected assets reuses the existing `createProjectFromPickedAssets` flow.
+
+### Validation
+
+- `npm run typecheck` passes in `apps/mobile`.
+- Browser automation was unavailable in this Codex session, and direct curl to the existing Expo server did not connect despite the process listening on `8081`; manual phone verification is still needed for gesture feel.
+
 ## 2026-06-13 - Same-Scene Variant Suppression
 
 ### Product/Architecture Decision

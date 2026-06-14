@@ -6,7 +6,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,7 @@ import {
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -46,6 +47,7 @@ import {
   FeedPreviewCandidate,
   InstagramConnectionState,
   InstagramPublishResult,
+  PickedAssetInput,
   RankedPick,
   RankingResult,
   TripPhoto,
@@ -83,6 +85,14 @@ type ExportVariationResult = {
   status: ExportStatus;
   savedCount: number;
   message: string;
+};
+
+type AssetLayout = {
+  height: number;
+  index: number;
+  width: number;
+  x: number;
+  y: number;
 };
 
 function wait(ms: number) {
@@ -362,6 +372,7 @@ export default function App() {
   const [instagramStatusMessage, setInstagramStatusMessage] = useState('Instagram is not connected yet.');
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [lastInstagramAuthUrl, setLastInstagramAuthUrl] = useState<string | null>(null);
+  const [tripPickerVisible, setTripPickerVisible] = useState(false);
 
   const photosById = useMemo(() => {
     return new Map((project?.photos ?? []).map((photo) => [photo.photoId, photo]));
@@ -1027,7 +1038,15 @@ export default function App() {
     }
   }
 
-  async function pickPhotos() {
+  function usePickedAssets(assets: PickedAssetInput[]) {
+    const pickedProject = createProjectFromPickedAssets(assets);
+    setProject(pickedProject);
+    setSelectedVariationId(null);
+    setTripPickerVisible(false);
+    setScreen('import');
+  }
+
+  async function pickPhotosWithSystemPicker() {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync(false);
       const nextPermissionState =
@@ -1051,12 +1070,32 @@ export default function App() {
         return;
       }
 
-      const pickedProject = createProjectFromPickedAssets(result.assets);
-      setProject(pickedProject);
-      setSelectedVariationId(null);
-      setScreen('import');
+      usePickedAssets(result.assets);
     } catch (error) {
       Alert.alert('Photo picker failed', error instanceof Error ? error.message : 'Try again from the sample trip.');
+    }
+  }
+
+  async function pickPhotos() {
+    try {
+      if (Platform.OS === 'web' || !(await MediaLibrary.isAvailableAsync())) {
+        await pickPhotosWithSystemPicker();
+        return;
+      }
+
+      const permission = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
+      const nextPermissionState =
+        permission.accessPrivileges === 'limited' ? 'limited' : permission.granted ? 'granted' : 'denied';
+      setPermissionState(nextPermissionState);
+
+      if (!permission.granted && permission.accessPrivileges !== 'limited') {
+        Alert.alert('Photo access needed', 'Choose selected photo access to build carousel options.');
+        return;
+      }
+
+      setTripPickerVisible(true);
+    } catch {
+      await pickPhotosWithSystemPicker();
     }
   }
 
@@ -1179,6 +1218,15 @@ export default function App() {
         onOpenAuthUrl={openLastInstagramAuthUrl}
         onRefresh={() => void refreshInstagramConnection(undefined, true)}
         onRefreshFeed={useInstagramFeed}
+      />
+      <TripPhotoPickerModal
+        visible={tripPickerVisible}
+        onClose={() => setTripPickerVisible(false)}
+        onConfirm={usePickedAssets}
+        onOpenSystemPicker={() => {
+          setTripPickerVisible(false);
+          void pickPhotosWithSystemPicker();
+        }}
       />
     </SafeAreaView>
   );
@@ -1639,6 +1687,327 @@ function AnalyzeScreen({ project, stepIndex }: { project: TripProject | null; st
         </Text>
       </View>
     </View>
+  );
+}
+
+function TripPhotoPickerModal({
+  visible,
+  onClose,
+  onConfirm,
+  onOpenSystemPicker,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onConfirm: (assets: PickedAssetInput[]) => void;
+  onOpenSystemPicker: () => void;
+}) {
+  const { width } = useWindowDimensions();
+  const [assets, setAssets] = useState<MediaLibrary.Asset[]>([]);
+  const [endCursor, setEndCursor] = useState<string | undefined>();
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const selectedIdsRef = useRef<Set<string>>(new Set());
+  const layoutsRef = useRef<Map<string, AssetLayout>>(new Map());
+  const dragAnchorIndexRef = useRef<number | null>(null);
+  const ignoreNextPressRef = useRef(false);
+  const gridRef = useRef<View | null>(null);
+  const gridWindowOriginRef = useRef({ x: 0, y: 0 });
+  const tileGap = 4;
+  const columnCount = 3;
+  const gridWidth = Math.min(width - 32, 560);
+  const tileSize = Math.floor((gridWidth - tileGap * (columnCount - 1)) / columnCount);
+
+  function syncSelectedIds(nextIds: string[]) {
+    selectedIdsRef.current = new Set(nextIds);
+    setSelectedIds(nextIds);
+  }
+
+  function selectedAssetInputs() {
+    const selected = new Set(selectedIds);
+    return assets
+      .filter((asset) => selected.has(asset.id))
+      .map<PickedAssetInput>((asset) => ({
+        assetId: asset.id,
+        fileName: asset.filename,
+        height: asset.height,
+        uri: asset.uri,
+        width: asset.width,
+      }));
+  }
+
+  function measureGrid() {
+    gridRef.current?.measureInWindow((x, y) => {
+      gridWindowOriginRef.current = { x, y };
+    });
+  }
+
+  async function loadAssets(reset = false) {
+    if (loading) {
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const page = await MediaLibrary.getAssetsAsync({
+        after: reset ? undefined : endCursor,
+        first: 180,
+        mediaType: MediaLibrary.MediaType.photo,
+        sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+      });
+
+      setAssets((currentAssets) => {
+        const nextAssets = reset ? page.assets : [...currentAssets, ...page.assets];
+        const seen = new Set<string>();
+        return nextAssets.filter((asset) => {
+          if (seen.has(asset.id)) {
+            return false;
+          }
+
+          seen.add(asset.id);
+          return true;
+        });
+      });
+      setEndCursor(page.endCursor);
+      setHasNextPage(page.hasNextPage);
+
+      if (reset) {
+        syncSelectedIds([]);
+        layoutsRef.current.clear();
+      }
+    } catch (error) {
+      Alert.alert('Camera roll could not load', error instanceof Error ? error.message : 'Use the system picker instead.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleAsset(assetId: string) {
+    const selected = new Set(selectedIdsRef.current);
+
+    if (selected.has(assetId)) {
+      selected.delete(assetId);
+    } else {
+      selected.add(assetId);
+    }
+
+    syncSelectedIds(assets.filter((asset) => selected.has(asset.id)).map((asset) => asset.id));
+  }
+
+  function selectRange(fromIndex: number, toIndex: number) {
+    const selected = new Set(selectedIdsRef.current);
+    const start = Math.max(0, Math.min(fromIndex, toIndex));
+    const end = Math.min(assets.length - 1, Math.max(fromIndex, toIndex));
+
+    for (let index = start; index <= end; index += 1) {
+      const asset = assets[index];
+
+      if (asset) {
+        selected.add(asset.id);
+      }
+    }
+
+    syncSelectedIds(assets.filter((asset) => selected.has(asset.id)).map((asset) => asset.id));
+  }
+
+  function assetIndexAt(windowX: number, windowY: number) {
+    const localX = windowX - gridWindowOriginRef.current.x;
+    const localY = windowY - gridWindowOriginRef.current.y;
+
+    for (const layout of layoutsRef.current.values()) {
+      if (
+        localX >= layout.x &&
+        localX <= layout.x + layout.width &&
+        localY >= layout.y &&
+        localY <= layout.y + layout.height
+      ) {
+        return layout.index;
+      }
+    }
+
+    return undefined;
+  }
+
+  const panResponder = useMemo(() =>
+    PanResponder.create({
+      onMoveShouldSetPanResponder: () => dragAnchorIndexRef.current !== null,
+      onMoveShouldSetPanResponderCapture: () => dragAnchorIndexRef.current !== null,
+      onPanResponderGrant: () => {
+        measureGrid();
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        const anchorIndex = dragAnchorIndexRef.current;
+
+        if (anchorIndex === null) {
+          return;
+        }
+
+        const targetIndex = assetIndexAt(gestureState.moveX, gestureState.moveY);
+
+        if (targetIndex !== undefined) {
+          selectRange(anchorIndex, targetIndex);
+        }
+      },
+      onPanResponderRelease: () => {
+        dragAnchorIndexRef.current = null;
+      },
+      onPanResponderTerminate: () => {
+        dragAnchorIndexRef.current = null;
+      },
+    }),
+  [assets]);
+
+  useEffect(() => {
+    if (visible) {
+      void loadAssets(true);
+    }
+  }, [visible]);
+
+  return (
+    <Modal
+      animationType="slide"
+      presentationStyle="fullScreen"
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={styles.tripPickerShell}>
+        <View style={styles.tripPickerHeader}>
+          <View style={styles.flexText}>
+            <Text style={styles.tripPickerEyebrow}>Camera roll</Text>
+            <Text style={styles.tripPickerTitle}>Select trip photos</Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onClose}
+            style={({ pressed }) => [styles.modalCloseButton, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.modalCloseButtonText}>Close</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.tripPickerToolbar}>
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeValue}>{selectedIds.length}</Text>
+            <Text style={styles.countBadgeLabel}>selected</Text>
+          </View>
+          <SecondaryButton
+            label="Newest 100"
+            onPress={() => {
+              syncSelectedIds(assets.slice(0, Math.min(100, assets.length)).map((asset) => asset.id));
+            }}
+          />
+          <SecondaryButton
+            label="Clear"
+            onPress={() => syncSelectedIds([])}
+          />
+        </View>
+
+        <Text style={styles.tripPickerHint}>Long-press a photo, then drag across nearby photos to select a range.</Text>
+
+        <ScrollView
+          contentContainerStyle={styles.tripPickerScroll}
+          scrollEventThrottle={16}
+          onScroll={() => measureGrid()}
+        >
+          <View
+            ref={gridRef}
+            {...panResponder.panHandlers}
+            style={[styles.tripPickerGrid, { maxWidth: gridWidth }]}
+            onLayout={() => measureGrid()}
+          >
+            {assets.map((asset, index) => {
+              const selected = selectedIds.includes(asset.id);
+
+              return (
+                <Pressable
+                  key={asset.id}
+                  delayLongPress={180}
+                  onLayout={(event) => {
+                    layoutsRef.current.set(asset.id, {
+                      height: event.nativeEvent.layout.height,
+                      index,
+                      width: event.nativeEvent.layout.width,
+                      x: event.nativeEvent.layout.x,
+                      y: event.nativeEvent.layout.y,
+                    });
+                  }}
+                  onLongPress={() => {
+                    measureGrid();
+                    ignoreNextPressRef.current = true;
+                    dragAnchorIndexRef.current = index;
+                    selectRange(index, index);
+                  }}
+                  onPress={() => {
+                    if (ignoreNextPressRef.current) {
+                      ignoreNextPressRef.current = false;
+                      return;
+                    }
+
+                    toggleAsset(asset.id);
+                  }}
+                  style={({ pressed }) => [
+                    styles.tripPickerTile,
+                    {
+                      height: tileSize,
+                      width: tileSize,
+                    },
+                    selected && styles.tripPickerTileSelected,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Image
+                    source={{ uri: asset.uri }}
+                    style={styles.tripPickerImage}
+                  />
+                  {selected ? (
+                    <View style={styles.tripPickerCheck}>
+                      <Text style={styles.tripPickerCheckText}>{selectedIds.indexOf(asset.id) + 1}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {loading ? (
+            <ActivityIndicator color="#E4572E" />
+          ) : hasNextPage ? (
+            <SecondaryButton
+              label="Load more"
+              onPress={() => void loadAssets(false)}
+            />
+          ) : null}
+
+          {!assets.length && !loading ? (
+            <EmptyState
+              title="No photos found"
+              copy="Use the system picker if the camera roll is unavailable here."
+            />
+          ) : null}
+        </ScrollView>
+
+        <View style={styles.tripPickerFooter}>
+          <SecondaryButton
+            label="System picker"
+            onPress={onOpenSystemPicker}
+          />
+          <PrimaryButton
+            label={selectedIds.length ? `Use ${selectedIds.length} photos` : 'Use selected photos'}
+            onPress={() => {
+              const selectedAssets = selectedAssetInputs();
+
+              if (!selectedAssets.length) {
+                Alert.alert('No photos selected', 'Select at least one photo to build a trip.');
+                return;
+              }
+
+              onConfirm(selectedAssets);
+            }}
+          />
+        </View>
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -3070,6 +3439,104 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  tripPickerShell: {
+    flex: 1,
+    backgroundColor: '#F4F6F8',
+  },
+  tripPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DCE2E8',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    paddingTop: 10,
+  },
+  tripPickerEyebrow: {
+    color: '#E4572E',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  tripPickerTitle: {
+    color: '#1E2328',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  tripPickerToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  tripPickerHint: {
+    color: '#66717E',
+    fontSize: 12,
+    lineHeight: 17,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  tripPickerScroll: {
+    alignItems: 'center',
+    gap: 14,
+    padding: 16,
+    paddingBottom: 110,
+  },
+  tripPickerGrid: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  tripPickerTile: {
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+    borderRadius: 6,
+    backgroundColor: '#D6DCE3',
+  },
+  tripPickerTileSelected: {
+    borderColor: '#E4572E',
+  },
+  tripPickerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  tripPickerCheck: {
+    position: 'absolute',
+    right: 6,
+    top: 6,
+    minWidth: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    backgroundColor: '#E4572E',
+    paddingHorizontal: 6,
+  },
+  tripPickerCheckText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  tripPickerFooter: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    left: 0,
+    flexDirection: 'row',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#DCE2E8',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    paddingTop: 12,
+  },
   emptyState: {
     borderWidth: 1,
     borderColor: '#DCE2E8',
@@ -3353,6 +3820,11 @@ const styles = StyleSheet.create({
   },
   modalCloseText: {
     color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  modalCloseButtonText: {
+    color: '#1E2328',
     fontSize: 13,
     fontWeight: '900',
   },
