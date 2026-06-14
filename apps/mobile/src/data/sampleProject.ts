@@ -146,6 +146,14 @@ function cropHintForTemplate(template: CarouselSlideTemplate, fallbackPhoto?: Tr
   return fallbackPhoto ? cropHintFor(fallbackPhoto) : 'none';
 }
 
+function visualKeyForPhoto(photo: TripPhoto) {
+  if (photo.sourceAssetId && !photo.sourceAssetId.startsWith('picked-asset-')) {
+    return photo.sourceAssetId;
+  }
+
+  return photo.localUri || photo.thumbnailUri || photo.sourceAssetId || photo.photoId;
+}
+
 function createPhoto(index: number, projectId: string): TripPhoto {
   const moment = moments[index % moments.length];
   const portrait = index % 4 !== 1;
@@ -277,10 +285,12 @@ function photoIdsForSlide(orderedPhotos: TripPhoto[], variationIndex: number, sl
           return orientationDelta || a.distance - b.distance;
         });
   const photoIds: string[] = [];
+  const visualKeys = new Set<string>();
 
   for (const { photo } of orderedCandidates) {
-    if (photo && !photoIds.includes(photo.photoId)) {
+    if (photo && !photoIds.includes(photo.photoId) && !visualKeys.has(visualKeyForPhoto(photo))) {
       photoIds.push(photo.photoId);
+      visualKeys.add(visualKeyForPhoto(photo));
     }
 
     if (photoIds.length === needed) {

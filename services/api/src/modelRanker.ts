@@ -334,6 +334,22 @@ function parseCapturedAt(value?: string) {
   return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
+function sourceIdentityKey(feature: PhotoFeature) {
+  const sourceAssetId = feature.photo.sourceAssetId?.trim();
+  return sourceAssetId ? `asset:${sourceAssetId}` : `photo:${feature.photo.photoId}`;
+}
+
+function visualIdentityKey(feature: PhotoFeature) {
+  return feature.duplicateGroupId ? `duplicate:${feature.duplicateGroupId}` : sourceIdentityKey(feature);
+}
+
+function sameSourceAsset(left: PhotoFeature, right: PhotoFeature) {
+  const leftSourceAssetId = left.photo.sourceAssetId?.trim();
+  const rightSourceAssetId = right.photo.sourceAssetId?.trim();
+
+  return Boolean(leftSourceAssetId && rightSourceAssetId && leftSourceAssetId === rightSourceAssetId);
+}
+
 function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt: string) {
   const duplicateGroups: DuplicateGroup[] = [];
   const assigned = new Set<string>();
@@ -350,12 +366,13 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
         continue;
       }
 
+      const sourceAssetMatch = sameSourceAsset(feature, candidate);
       const similarity = cosineSimilarity(feature.embedding, candidate.embedding);
       const sameMoment = (feature.photo.momentId ?? '') === (candidate.photo.momentId ?? '');
       const closeTime = areCloseInTime(feature, candidate, 90_000);
       const exactEmbedding = Boolean(feature.photo.embedding?.length && candidate.photo.embedding?.length && similarity > 0.985);
 
-      if (exactEmbedding || similarity > 0.975 || (similarity > 0.91 && sameMoment && closeTime)) {
+      if (sourceAssetMatch || exactEmbedding || similarity > 0.975 || (similarity > 0.91 && sameMoment && closeTime)) {
         group.push(candidate);
       }
     }
@@ -372,12 +389,15 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
     }
 
     const groupId = `dup-${duplicateGroups.length + 1}`;
+    const hasSourceAssetMatch = group.some((item) => item.photo.photoId !== feature.photo.photoId && sameSourceAsset(feature, item));
     const averageSimilarity = average(group.slice(1).map((item) => cosineSimilarity(feature.embedding, item.embedding)), 0.9);
-    const duplicateType = group.every((item) => areCloseInTime(feature, item, 20_000))
-      ? 'burst'
-      : averageSimilarity > 0.985
-        ? 'near'
-        : 'similar';
+    const duplicateType = hasSourceAssetMatch
+      ? 'exact'
+      : group.every((item) => areCloseInTime(feature, item, 20_000))
+        ? 'burst'
+        : averageSimilarity > 0.985
+          ? 'near'
+          : 'similar';
 
     for (const item of group) {
       item.duplicateGroupId = groupId;
@@ -393,7 +413,11 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
       groupId,
       photoIds: rankedGroup.map((item) => item.photo.photoId),
       projectId,
-      reasonCodes: duplicateType === 'burst' ? ['time_proximity', 'visual_similarity'] : ['visual_similarity'],
+      reasonCodes: duplicateType === 'exact'
+        ? ['source_asset_match']
+        : duplicateType === 'burst'
+          ? ['time_proximity', 'visual_similarity']
+          : ['visual_similarity'],
       representativePhotoId: feature.photo.photoId,
     });
   }
@@ -415,6 +439,7 @@ function selectDiverseFeatures(features: PhotoFeature[], limit: number) {
     .sort((left, right) => right.finalScore - left.finalScore);
   const selected: PhotoFeature[] = [];
   const selectedIds = new Set<string>();
+  const selectedVisualKeys = new Set<string>();
   const momentCounts = new Map<string, number>();
   const labelCounts = new Map<string, number>();
 
@@ -423,7 +448,7 @@ function selectDiverseFeatures(features: PhotoFeature[], limit: number) {
     let bestScore = Number.NEGATIVE_INFINITY;
 
     for (const candidate of candidates) {
-      if (selectedIds.has(candidate.photo.photoId)) {
+      if (selectedIds.has(candidate.photo.photoId) || selectedVisualKeys.has(visualIdentityKey(candidate))) {
         continue;
       }
 
@@ -453,6 +478,7 @@ function selectDiverseFeatures(features: PhotoFeature[], limit: number) {
 
     selected.push(bestCandidate);
     selectedIds.add(bestCandidate.photo.photoId);
+    selectedVisualKeys.add(visualIdentityKey(bestCandidate));
     const momentId = bestCandidate.photo.momentId ?? 'moment-unknown';
     momentCounts.set(momentId, (momentCounts.get(momentId) ?? 0) + 1);
 
@@ -551,17 +577,19 @@ function composeVariation(strategy: VariationStrategy, selectedFeatures: PhotoFe
   const fallbackPool = selectedFeatures.filter((feature) => !pool.includes(feature));
   const workingPool = [...pool, ...fallbackPool];
   const usedPhotoIds = new Set<string>();
+  const usedVisualKeys = new Set<string>();
   const slides: CarouselSlide[] = [];
   const hero = workingPool[0] ?? selectedFeatures[0];
 
   if (hero) {
     slides.push(createSlide('single', [hero], slides.length + 1, titleForStrategy(strategy, 'Opener'), 'Strongest cover candidate for this edit.'));
     usedPhotoIds.add(hero.photo.photoId);
+    usedVisualKeys.add(visualIdentityKey(hero));
   }
 
   const sameMomentGroups = groupByMoment(workingPool.filter((feature) => !usedPhotoIds.has(feature.photo.photoId)));
-  addTemplateSlides(slides, sameMomentGroups, usedPhotoIds, strategy, maxSlides);
-  fillSingleSlides(slides, workingPool, usedPhotoIds, maxSlides);
+  addTemplateSlides(slides, sameMomentGroups, usedPhotoIds, usedVisualKeys, strategy, maxSlides);
+  fillSingleSlides(slides, workingPool, usedPhotoIds, usedVisualKeys, maxSlides);
 
   const uniquePhotoIds = new Set(slides.flatMap((slide) => slide.photoIds));
   const confidence = average(
@@ -632,6 +660,7 @@ function addTemplateSlides(
   slides: CarouselSlide[],
   sameMomentGroups: PhotoFeature[][],
   usedPhotoIds: Set<string>,
+  usedVisualKeys: Set<string>,
   strategy: VariationStrategy,
   maxSlides: number,
 ) {
@@ -646,7 +675,7 @@ function addTemplateSlides(
       return;
     }
 
-    const selected = selectPhotosForTemplate(template, sameMomentGroups, usedPhotoIds, strategy);
+    const selected = selectPhotosForTemplate(template, sameMomentGroups, usedPhotoIds, usedVisualKeys, strategy);
 
     if (!selected.length) {
       continue;
@@ -662,6 +691,7 @@ function addTemplateSlides(
 
     for (const feature of selected) {
       usedPhotoIds.add(feature.photo.photoId);
+      usedVisualKeys.add(visualIdentityKey(feature));
     }
   }
 }
@@ -670,26 +700,55 @@ function selectPhotosForTemplate(
   template: CarouselSlideTemplate,
   sameMomentGroups: PhotoFeature[][],
   usedPhotoIds: Set<string>,
+  usedVisualKeys: Set<string>,
   strategy: VariationStrategy,
 ) {
   const requiredCount = template === 'detail_grid' ? 4 : template === 'single' ? 1 : 3;
 
   for (const group of sameMomentGroups) {
-    const available = group.filter((feature) => !usedPhotoIds.has(feature.photo.photoId));
+    const available = group.filter((feature) =>
+      !usedPhotoIds.has(feature.photo.photoId) && !usedVisualKeys.has(visualIdentityKey(feature)),
+    );
     const ranked = rankTemplateCandidates(template, available, strategy);
+    const selected = takeUniqueVisualCandidates(ranked, requiredCount);
 
-    if (ranked.length >= requiredCount) {
-      return ranked.slice(0, requiredCount);
+    if (selected.length >= requiredCount) {
+      return selected;
     }
   }
 
   const globalRanked = rankTemplateCandidates(
     template,
-    sameMomentGroups.flat().filter((feature) => !usedPhotoIds.has(feature.photo.photoId)),
+    sameMomentGroups.flat().filter((feature) =>
+      !usedPhotoIds.has(feature.photo.photoId) && !usedVisualKeys.has(visualIdentityKey(feature)),
+    ),
     strategy,
   );
+  const selected = takeUniqueVisualCandidates(globalRanked, requiredCount);
 
-  return globalRanked.length >= requiredCount ? globalRanked.slice(0, requiredCount) : [];
+  return selected.length >= requiredCount ? selected : [];
+}
+
+function takeUniqueVisualCandidates(features: PhotoFeature[], limit: number) {
+  const selected: PhotoFeature[] = [];
+  const selectedVisualKeys = new Set<string>();
+
+  for (const feature of features) {
+    const key = visualIdentityKey(feature);
+
+    if (selectedVisualKeys.has(key)) {
+      continue;
+    }
+
+    selected.push(feature);
+    selectedVisualKeys.add(key);
+
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  return selected;
 }
 
 function rankTemplateCandidates(
@@ -728,6 +787,7 @@ function fillSingleSlides(
   slides: CarouselSlide[],
   workingPool: PhotoFeature[],
   usedPhotoIds: Set<string>,
+  usedVisualKeys: Set<string>,
   maxSlides: number,
 ) {
   for (const feature of workingPool) {
@@ -735,7 +795,7 @@ function fillSingleSlides(
       return;
     }
 
-    if (usedPhotoIds.has(feature.photo.photoId)) {
+    if (usedPhotoIds.has(feature.photo.photoId) || usedVisualKeys.has(visualIdentityKey(feature))) {
       continue;
     }
 
@@ -749,6 +809,7 @@ function fillSingleSlides(
         : 'Adds another distinct scene to the carousel.',
     ));
     usedPhotoIds.add(feature.photo.photoId);
+    usedVisualKeys.add(visualIdentityKey(feature));
   }
 }
 

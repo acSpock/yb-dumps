@@ -2,6 +2,29 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - Carousel Composer Source-Asset Deduping
+
+### Product/Architecture Decision
+
+- Multi-photo templates must not repeat the same underlying image inside one slide.
+- Until real pixel embeddings/perceptual hashes are available, the ranker treats matching `sourceAssetId` values as exact duplicates.
+- Mobile sends a hashed local source key when Expo does not provide a stable camera-roll asset id, so repeated local URIs can still be deduped without sending raw file paths.
+- Composer selection now avoids reusing the same visual identity across a carousel variation and within each multi-photo slide.
+
+### Implementation Done
+
+- `services/api/src/modelRanker.ts` now groups matching `sourceAssetId` photos as exact duplicate groups.
+- Template selection and single-slide fill now track `visualIdentityKey`, based on duplicate group or source asset.
+- `apps/mobile/src/services/analysisApi.ts` hashes local URI metadata into a stable fallback source id when needed.
+- Local fallback carousel generation also avoids repeating the same visual source in one slide.
+
+### Validation
+
+- Added an API regression test for repeated source assets appearing as different photo ids.
+- `npm run typecheck` passes in `services/api`.
+- `npm run typecheck` passes in `apps/mobile`.
+- `npm test` passes in `services/api` outside the sandbox, where localhost binding is allowed.
+
 ## 2026-06-13 - Mobile Analysis Integrated With Backend Ranker
 
 ### Product/Architecture Decision

@@ -68,6 +68,56 @@ test('groups near duplicates and keeps the strongest frame in top picks', () => 
   assert.equal(result.topPicks.some((pick) => pick.photoId === 'burst-soft'), false);
 });
 
+test('dedupes repeated source assets before composing multi-photo slides', () => {
+  const photos = Array.from({ length: 16 }, (_, index) => photo({
+    aestheticScore: index < 2 ? 0.92 - index * 0.01 : 0.76 - index * 0.005,
+    capturedAt: `2026-06-01T12:${String(index).padStart(2, '0')}:00.000Z`,
+    colorProfile: {
+      brightness: 0.58,
+      contrast: 0.58,
+      saturation: 0.56,
+      warmth: 0.6,
+    },
+    height: index % 3 === 0 ? 1200 : 1500,
+    labels: index % 4 === 0 ? ['detail', 'food'] : ['landscape', 'place'],
+    momentId: `moment-${Math.floor(index / 4)}`,
+    photoId: index === 0 ? 'same-source-a' : index === 1 ? 'same-source-b' : `photo-${index}`,
+    qualitySignals: {
+      exposure: 0.84,
+      faceCount: 0,
+      sharpness: 0.86,
+    },
+    sourceAssetId: index < 2 ? 'same-camera-asset' : `camera-asset-${index}`,
+    width: index % 3 === 0 ? 2000 : 1700,
+  }));
+
+  const result = analyzeTripPhotos(request({
+    options: {
+      carouselMaxSlides: 20,
+      topPoolSize: 16,
+      variationCount: 3,
+    },
+    photos,
+  }));
+  const repeatedAssetGroup = result.duplicateGroups.find((group) =>
+    group.photoIds.includes('same-source-a') && group.photoIds.includes('same-source-b'),
+  );
+
+  assert.ok(repeatedAssetGroup);
+  assert.equal(repeatedAssetGroup.duplicateType, 'exact');
+  assert.equal(result.topPicks.filter((pick) => ['same-source-a', 'same-source-b'].includes(pick.photoId)).length, 1);
+
+  for (const slide of result.carouselVariations.flatMap((variation) => variation.slides)) {
+    const sourceAssetIds = slide.photoIds.map((photoId) => {
+      const sourcePhoto = photos.find((item) => item.photoId === photoId);
+      assert.ok(sourcePhoto);
+      return sourcePhoto.sourceAssetId ?? sourcePhoto.photoId;
+    });
+
+    assert.equal(sourceAssetIds.length, new Set(sourceAssetIds).size);
+  }
+});
+
 test('composes carousels under the 20-slide Instagram limit and prefers landscape photos for stacked templates', () => {
   const photos = Array.from({ length: 34 }, (_, index) => {
     const isLandscapeMoment = index < 8;

@@ -110,6 +110,26 @@ function qualitySignalsForPhoto(photo: TripPhoto) {
   };
 }
 
+function sourceAssetIdForPhoto(photo: TripPhoto) {
+  const sourceAssetId = photo.sourceAssetId.trim();
+
+  if (sourceAssetId && !sourceAssetId.startsWith('picked-asset-')) {
+    return sourceAssetId;
+  }
+
+  const localSource = [
+    photo.localUri,
+    photo.thumbnailUri,
+    photo.originalFilename,
+    photo.width,
+    photo.height,
+  ]
+    .filter(Boolean)
+    .join('|');
+
+  return localSource ? `local-${hashString(localSource).toString(36)}` : sourceAssetId;
+}
+
 function photoInput(photo: TripPhoto): AnalysisPhotoInput {
   return {
     capturedAt: photo.capturedAt,
@@ -121,7 +141,7 @@ function photoInput(photo: TripPhoto): AnalysisPhotoInput {
     photoId: photo.photoId,
     projectId: photo.projectId,
     qualitySignals: qualitySignalsForPhoto(photo),
-    sourceAssetId: photo.sourceAssetId,
+    sourceAssetId: sourceAssetIdForPhoto(photo),
     width: photo.width,
   };
 }
