@@ -155,6 +155,27 @@ test('dedupes repeated perceptual hashes and returns CPU model version', () => {
   assert.equal(result.topPicks.some((pick) => pick.photoId === 'hash-soft'), false);
 });
 
+test('still returns picks when every candidate is low quality', () => {
+  const result = analyzeTripPhotos(request({
+    photos: [
+      photo({
+        height: 64,
+        modelQualitySignals: { exposure: 0.35, sharpness: 0.2 },
+        photoId: 'tiny-soft',
+        width: 64,
+      }),
+    ],
+    options: {
+      carouselMaxSlides: 1,
+      topPoolSize: 1,
+      variationCount: 1,
+    },
+  }));
+
+  assert.equal(result.topPicks.length, 1);
+  assert.equal(result.carouselVariations[0]?.slideCount, 1);
+});
+
 test('composes carousels under the 20-slide Instagram limit and prefers landscape photos for stacked templates', () => {
   const photos = Array.from({ length: 34 }, (_, index) => {
     const isLandscapeMoment = index < 8;

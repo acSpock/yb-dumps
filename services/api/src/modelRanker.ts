@@ -509,9 +509,11 @@ function areCloseInTime(left: PhotoFeature, right: PhotoFeature, thresholdMs: nu
 }
 
 function selectDiverseFeatures(features: PhotoFeature[], limit: number) {
-  const candidates = features
-    .filter((feature) => feature.isDuplicateWinner && !feature.qualityFlags.includes('low_quality'))
+  const duplicateWinners = features
+    .filter((feature) => feature.isDuplicateWinner)
     .sort((left, right) => right.finalScore - left.finalScore);
+  const qualityCandidates = duplicateWinners.filter((feature) => !feature.qualityFlags.includes('low_quality'));
+  const candidates = qualityCandidates.length ? qualityCandidates : duplicateWinners;
   const selected: PhotoFeature[] = [];
   const selectedIds = new Set<string>();
   const selectedVisualKeys = new Set<string>();
