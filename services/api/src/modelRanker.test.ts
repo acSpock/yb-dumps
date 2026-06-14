@@ -155,6 +155,86 @@ test('dedupes repeated perceptual hashes and returns CPU model version', () => {
   assert.equal(result.topPicks.some((pick) => pick.photoId === 'hash-soft'), false);
 });
 
+test('groups visually similar same-scene variants when CPU embeddings agree', () => {
+  const result = analyzeTripPhotos(request({
+    photos: [
+      photo({
+        colorProfile: { brightness: 0.55, contrast: 0.72, saturation: 0.62, warmth: 0.76 },
+        labels: ['architecture', 'place', 'warm'],
+        modelLabels: ['landscape', 'warm'],
+        modelQualitySignals: { exposure: 0.8, sharpness: 0.82 },
+        photoId: 'yellow-building-wide',
+        visualEmbedding: [1, 0, 0, 0],
+        width: 1800,
+        height: 1200,
+      }),
+      photo({
+        aestheticScore: 0.88,
+        colorProfile: { brightness: 0.56, contrast: 0.69, saturation: 0.6, warmth: 0.74 },
+        labels: ['architecture', 'place', 'warm'],
+        modelLabels: ['landscape', 'warm'],
+        modelQualitySignals: { exposure: 0.84, sharpness: 0.9 },
+        photoId: 'yellow-building-angle',
+        visualEmbedding: [0.94, 0.34, 0, 0],
+        width: 1800,
+        height: 1200,
+      }),
+      photo({
+        colorProfile: { brightness: 0.43, contrast: 0.55, saturation: 0.48, warmth: 0.5 },
+        labels: ['food', 'detail'],
+        momentId: 'moment-2',
+        photoId: 'dinner-detail',
+        visualEmbedding: [0, 1, 0, 0],
+      }),
+    ],
+    options: {
+      topPoolSize: 3,
+    },
+  }));
+  const group = result.duplicateGroups.find((duplicateGroup) =>
+    duplicateGroup.photoIds.includes('yellow-building-wide') &&
+      duplicateGroup.photoIds.includes('yellow-building-angle'),
+  );
+
+  assert.ok(group);
+  assert.equal(group.duplicateType, 'similar');
+  assert.ok(group.reasonCodes.includes('same_scene_variant'));
+  assert.equal(result.topPicks.filter((pick) => pick.photoId.startsWith('yellow-building')).length, 1);
+});
+
+test('does not collapse metadata-only lookalikes without CPU evidence', () => {
+  const result = analyzeTripPhotos(request({
+    photos: [
+      photo({
+        capturedAt: '2026-06-01T12:00:00.000Z',
+        colorProfile: { brightness: 0.55, contrast: 0.72, saturation: 0.62, warmth: 0.76 },
+        labels: ['architecture', 'place', 'warm'],
+        momentId: 'morning-walk',
+        photoId: 'metadata-building-a',
+        sourceAssetId: 'asset-a',
+        width: 1800,
+        height: 1200,
+      }),
+      photo({
+        capturedAt: '2026-06-01T17:00:00.000Z',
+        colorProfile: { brightness: 0.56, contrast: 0.69, saturation: 0.6, warmth: 0.74 },
+        labels: ['architecture', 'place', 'warm'],
+        momentId: 'evening-walk',
+        photoId: 'metadata-building-b',
+        sourceAssetId: 'asset-b',
+        width: 1800,
+        height: 1200,
+      }),
+    ],
+    options: {
+      topPoolSize: 2,
+    },
+  }));
+
+  assert.equal(result.duplicateGroups.length, 0);
+  assert.equal(result.topPicks.filter((pick) => pick.photoId.startsWith('metadata-building')).length, 2);
+});
+
 test('still returns picks when every candidate is low quality', () => {
   const result = analyzeTripPhotos(request({
     photos: [

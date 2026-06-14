@@ -408,6 +408,41 @@ function perceptualHashMatch(left: PhotoFeature, right: PhotoFeature) {
   };
 }
 
+function hasModelEmbedding(feature: PhotoFeature) {
+  return Boolean(feature.photo.embedding?.length || feature.photo.visualEmbedding?.length);
+}
+
+function labelOverlapScore(left: string[], right: string[]) {
+  const leftLabels = new Set(left);
+  const rightLabels = new Set(right);
+  const intersection = [...leftLabels].filter((label) => rightLabels.has(label)).length;
+  const union = new Set([...leftLabels, ...rightLabels]).size;
+
+  return union ? intersection / union : 0;
+}
+
+function sameSceneVariantMatch(
+  left: PhotoFeature,
+  right: PhotoFeature,
+  similarity: number,
+  hashMatch?: ReturnType<typeof perceptualHashMatch>,
+) {
+  if (!hasModelEmbedding(left) || !hasModelEmbedding(right)) {
+    return false;
+  }
+
+  if (left.orientation !== right.orientation) {
+    return false;
+  }
+
+  const paletteSimilarity = colorMatch(left.colorProfile, right.colorProfile);
+  const labelOverlap = labelOverlapScore(left.sceneLabels, right.sceneLabels);
+
+  return paletteSimilarity >= 0.86 &&
+    labelOverlap >= 0.4 &&
+    (similarity >= 0.94 || (hashMatch?.distance !== undefined && hashMatch.distance <= 16));
+}
+
 function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt: string) {
   const duplicateGroups: DuplicateGroup[] = [];
   const assigned = new Set<string>();
@@ -429,13 +464,13 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
       const similarity = cosineSimilarity(feature.embedding, candidate.embedding);
       const sameMoment = (feature.photo.momentId ?? '') === (candidate.photo.momentId ?? '');
       const closeTime = areCloseInTime(feature, candidate, 90_000);
-      const hasModelEmbeddings = Boolean(
-        (feature.photo.embedding?.length || feature.photo.visualEmbedding?.length) &&
-          (candidate.photo.embedding?.length || candidate.photo.visualEmbedding?.length),
-      );
+      const hasModelEmbeddings = hasModelEmbedding(feature) && hasModelEmbedding(candidate);
       const exactEmbedding = hasModelEmbeddings && similarity > 0.985;
+      const modelSimilarityMatch = hasModelEmbeddings && similarity > 0.975;
+      const sceneVariantMatch = sameSceneVariantMatch(feature, candidate, similarity, hashMatch);
+      const metadataBurstMatch = !hasModelEmbeddings && similarity > 0.91 && sameMoment && closeTime;
 
-      if (sourceAssetMatch || hashMatch?.near || exactEmbedding || similarity > 0.975 || (similarity > 0.91 && sameMoment && closeTime)) {
+      if (sourceAssetMatch || hashMatch?.near || exactEmbedding || modelSimilarityMatch || sceneVariantMatch || metadataBurstMatch) {
         group.push(candidate);
       }
     }
@@ -460,6 +495,10 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
     const hasExactHashMatch = hashMatches.some((match) => match.exact);
     const hasNearHashMatch = hashMatches.some((match) => match.near);
     const averageSimilarity = average(group.slice(1).map((item) => cosineSimilarity(feature.embedding, item.embedding)), 0.9);
+    const hasSceneVariantMatch = group.slice(1).some((item) => {
+      const similarity = cosineSimilarity(feature.embedding, item.embedding);
+      return sameSceneVariantMatch(feature, item, similarity, perceptualHashMatch(feature, item));
+    });
     const averageHashConfidence = hashMatches.length
       ? average(hashMatches.map((match) => match.confidence), 0.85)
       : undefined;
@@ -469,6 +508,8 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
         ? 'exact'
         : hasNearHashMatch || averageSimilarity > 0.985
           ? 'near'
+          : hasSceneVariantMatch
+            ? 'similar'
           : group.every((item) => areCloseInTime(feature, item, 20_000))
             ? 'burst'
             : 'similar';
@@ -490,8 +531,9 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
       reasonCodes: [
         ...(hasSourceAssetMatch ? ['source_asset_match'] : []),
         ...(hasNearHashMatch || hasExactHashMatch ? ['perceptual_hash'] : []),
+        ...(hasSceneVariantMatch && !hasNearHashMatch && !hasExactHashMatch ? ['same_scene_variant'] : []),
         ...(duplicateType === 'burst' ? ['time_proximity'] : []),
-        ...(!hasNearHashMatch && !hasExactHashMatch ? ['visual_similarity'] : []),
+        ...(!hasNearHashMatch && !hasExactHashMatch && !hasSceneVariantMatch ? ['visual_similarity'] : []),
       ],
       representativePhotoId: feature.photo.photoId,
     });

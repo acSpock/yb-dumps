@@ -2,6 +2,26 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-13 - Same-Scene Variant Suppression
+
+### Product/Architecture Decision
+
+- Photos of the same subject from slightly different angles should generally compete with each other, not both appear in a generated carousel.
+- Repeating visually similar frames is acceptable only when a future template explicitly uses repetition as an artistic/comparison device.
+- Metadata-only fallback should not aggressively collapse unrelated lookalikes. The stricter same-scene suppression requires model-backed embeddings or CPU visual embeddings.
+
+### Implementation Done
+
+- Added a `same_scene_variant` duplicate reason in `services/api/src/modelRanker.ts`.
+- Same-scene grouping now requires model-backed visual evidence plus similar palette, matching orientation, overlapping scene labels, and sufficient visual similarity.
+- Tightened duplicate similarity logic so metadata-only photos still use source asset, exact hash, or same-moment/time burst signals rather than broad visual similarity.
+
+### Validation
+
+- Calibrated against the two provided screenshots: current CPU features saw hash distance 4 and visual cosine 0.998, which should group those frames when CPU analysis is active.
+- Added API tests for CPU-backed same-scene grouping and for avoiding metadata-only over-grouping.
+- `npm test` passes in `services/api` with 18 tests.
+
 ## 2026-06-13 - CPU-First Real Image Analysis Pipeline
 
 ### Product/Architecture Decision
