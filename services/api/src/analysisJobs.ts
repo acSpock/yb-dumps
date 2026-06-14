@@ -78,6 +78,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function logAnalysisJob(event: string, fields: Record<string, unknown>) {
+  console.log(JSON.stringify({
+    at: new Date().toISOString(),
+    event,
+    ...fields,
+  }));
+}
+
 function publicJob(job: StoredAnalysisJob): PublicAnalysisJob {
   return {
     assetCount: job.assetCount,
@@ -188,6 +196,11 @@ export function createAnalysisJobService(dataDir: string) {
     };
 
     await saveJob(job);
+    logAnalysisJob('analysis.job.created', {
+      assetCount: job.assetCount,
+      jobId: job.jobId,
+      projectId: job.projectId,
+    });
     return publicJob(job);
   }
 
@@ -226,6 +239,14 @@ export function createAnalysisJobService(dataDir: string) {
     job.stage = 'uploads';
     job.updatedAt = nowIso();
     await saveJob(job);
+    logAnalysisJob('analysis.asset.uploaded', {
+      assetCount: job.assetCount,
+      jobId: job.jobId,
+      mimeType: input.mimeType ?? parsed.mimeType ?? 'unknown',
+      photoId: input.photoId,
+      projectId: job.projectId,
+      uploadedAssetCount: job.uploadedAssetCount,
+    });
 
     return publicJob(job);
   }
@@ -255,15 +276,26 @@ export function createAnalysisJobService(dataDir: string) {
     job.progress = Math.max(job.progress, 0.35);
     job.updatedAt = startedAt;
     await saveJob(job);
+    logAnalysisJob('analysis.job.started', {
+      assetCount: job.assetCount,
+      jobId,
+      projectId: job.projectId,
+      uploadedAssetCount: job.uploadedAssetCount,
+    });
 
     try {
       const enrichedPhotos: AnalysisPhotoInput[] = [];
+      let analyzedAssetCount = 0;
 
       for (const [index, photo] of job.photos.entries()) {
         const imagePath = await findAssetPath(jobId, photo.photoId);
         const enrichedPhoto = imagePath
           ? await analyzeImageAsset({ imagePath, photo })
           : photo;
+
+        if (imagePath) {
+          analyzedAssetCount += 1;
+        }
 
         enrichedPhotos.push(enrichedPhoto);
         job.progress = 0.35 + ((index + 1) / Math.max(job.photos.length, 1)) * 0.38;
@@ -298,6 +330,15 @@ export function createAnalysisJobService(dataDir: string) {
       job.progress = 1;
       job.updatedAt = result.generatedAt;
       await saveJob(job);
+      logAnalysisJob('analysis.job.completed', {
+        analyzedAssetCount,
+        jobId,
+        modelVersion: result.modelVersion,
+        projectId: job.projectId,
+        resultId: result.resultId,
+        topPickCount: result.topPicks.length,
+        uploadedAssetCount: job.uploadedAssetCount,
+      });
 
       return {
         job: publicJob(job),
@@ -317,6 +358,12 @@ export function createAnalysisJobService(dataDir: string) {
       job.status = 'failed';
       job.updatedAt = completedAt;
       await saveJob(job);
+      logAnalysisJob('analysis.job.failed', {
+        error: job.error.message,
+        jobId,
+        projectId: job.projectId,
+        uploadedAssetCount: job.uploadedAssetCount,
+      });
       throw error;
     }
   }

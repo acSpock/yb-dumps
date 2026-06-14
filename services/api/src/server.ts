@@ -28,6 +28,42 @@ type AppContext = {
 
 const config = readConfig();
 
+function logRequestStart(requestId: string, request: IncomingMessage, url: URL) {
+  if (url.pathname === '/health') {
+    return;
+  }
+
+  console.log(JSON.stringify({
+    at: new Date().toISOString(),
+    event: 'request.start',
+    method: request.method,
+    path: url.pathname,
+    requestId,
+  }));
+}
+
+function logRequestFinish(
+  requestId: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  startedAtMs: number,
+) {
+  if (url.pathname === '/health') {
+    return;
+  }
+
+  console.log(JSON.stringify({
+    at: new Date().toISOString(),
+    durationMs: Date.now() - startedAtMs,
+    event: 'request.finish',
+    method: request.method,
+    path: url.pathname,
+    requestId,
+    statusCode: response.statusCode,
+  }));
+}
+
 function corsHeaders() {
   return {
     'access-control-allow-headers': 'content-type',
@@ -333,15 +369,23 @@ function isRecord(value: unknown): value is JsonRecord {
 
 export function createApiServer(context: AppContext) {
   const analysisJobs = context.analysisJobs ?? createAnalysisJobService(config.analysisDataDir);
+  let requestCounter = 0;
 
   return http.createServer((request, response) => {
     void (async () => {
+      const startedAtMs = Date.now();
+      const requestId = `req-${startedAtMs.toString(36)}-${(requestCounter += 1).toString(36)}`;
+      const url = new URL(request.url ?? '/', config.apiPublicUrl);
+
+      logRequestStart(requestId, request, url);
+      response.once('finish', () => {
+        logRequestFinish(requestId, request, response, url, startedAtMs);
+      });
+
       if (request.method === 'OPTIONS') {
         sendJson(response, 204, {});
         return;
       }
-
-      const url = new URL(request.url ?? '/', config.apiPublicUrl);
 
       if (request.method === 'GET' && url.pathname === '/health') {
         sendJson(response, 200, {
