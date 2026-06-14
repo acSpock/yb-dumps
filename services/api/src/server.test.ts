@@ -295,3 +295,90 @@ test('analysis job endpoint uploads resized assets, runs CPU vision, and cleans 
     await rm(tempDir, { force: true, recursive: true });
   }
 });
+
+test('analysis job optionally refines capped CPU candidates with GPU features', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'trip-picks-analysis-jobs-'));
+  const gpuAssetBatchSizes: number[] = [];
+  const server = createApiServer({
+    analysisJobs: createAnalysisJobService(tempDir, {
+      gpuCandidateLimit: 2,
+      gpuClient: {
+        provider: 'test-gpu',
+        async analyzeBatch({ assets }) {
+          gpuAssetBatchSizes.push(assets.length);
+          return assets.map((asset, index) => ({
+            aestheticScore: 0.92 - index * 0.01,
+            embedding: [1, index / 10, 0],
+            modelLabels: ['gpu_refined'],
+            modelProvider: 'test-gpu',
+            modelQualitySignals: {
+              exposure: 0.9,
+              sharpness: 0.95,
+            },
+            photoId: asset.photo.photoId,
+          }));
+        },
+      },
+    }),
+    metaConfigured: true,
+    oauthSecret: 'secret',
+    store: createMemoryStore(),
+  });
+
+  try {
+    await withServer(server, async (baseUrl) => {
+      const photos = Array.from({ length: 5 }, (_, index) => ({
+        height: 96,
+        labels: index % 2 ? ['people'] : ['place'],
+        momentId: `moment-${index}`,
+        photoId: `gpu-photo-${index}`,
+        width: 128,
+      }));
+      const createResponse = await fetch(`${baseUrl}/analysis/jobs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jobId: 'job-gpu-test',
+          options: {
+            carouselMaxSlides: 5,
+            topPoolSize: 5,
+          },
+          photos,
+          projectId: 'project-gpu-job',
+        }),
+      });
+
+      assert.equal(createResponse.status, 201);
+
+      for (const photo of photos) {
+        const uploadResponse = await fetch(`${baseUrl}/analysis/jobs/job-gpu-test/assets`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: await jpegBase64({ b: 72, g: 120, r: 220 }),
+            mimeType: 'image/jpeg',
+            photoId: photo.photoId,
+          }),
+        });
+
+        assert.equal(uploadResponse.status, 200);
+      }
+
+      const startResponse = await fetch(`${baseUrl}/analysis/jobs/job-gpu-test/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const started = await startResponse.json() as { result: RankingResult };
+
+      assert.equal(startResponse.status, 200);
+      assert.equal(gpuAssetBatchSizes.length, 1);
+      assert.ok((gpuAssetBatchSizes[0] ?? 0) > 0);
+      assert.ok((gpuAssetBatchSizes[0] ?? 0) <= 2);
+      assert.equal(started.result.modelVersion, 'gpu-vision-curation-v0.1.0');
+      assert.ok(started.result.photoScores.some((score) => score.sceneLabels.includes('gpu_refined')));
+    });
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+});

@@ -40,6 +40,8 @@ export type AnalysisPhotoInput = {
   visualEmbedding?: number[];
   modelLabels?: string[];
   modelQualitySignals?: AnalysisQualitySignals;
+  modelSource?: 'metadata' | 'cpu' | 'gpu';
+  modelProvider?: string;
 };
 
 export type FeedProfileAssetInput = {

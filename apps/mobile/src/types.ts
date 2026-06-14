@@ -13,6 +13,7 @@ export type JobStage =
   | 'quality'
   | 'duplicates'
   | 'embeddings'
+  | 'gpu_vision'
   | 'clustering'
   | 'ranking'
   | 'feed_fit'

@@ -9,6 +9,11 @@ import {
   RankingResult,
 } from './analysisContracts.js';
 import { analyzeImageAsset } from './cpuVision.js';
+import {
+  GpuFeatureAsset,
+  GpuFeatureClient,
+  mergeGpuFeature,
+} from './gpuFeatures.js';
 import { analyzeTripPhotos } from './modelRanker.js';
 
 export type AnalysisJobStatus =
@@ -23,6 +28,7 @@ export type AnalysisJobStage =
   | 'created'
   | 'uploads'
   | 'cpu_vision'
+  | 'gpu_vision'
   | 'ranking'
   | 'cleanup'
   | 'complete';
@@ -69,6 +75,11 @@ type SaveAssetInput = {
 };
 
 export type AnalysisJobService = ReturnType<typeof createAnalysisJobService>;
+
+type AnalysisJobServiceOptions = {
+  gpuCandidateLimit?: number;
+  gpuClient?: GpuFeatureClient;
+};
 
 function safeSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
@@ -140,8 +151,9 @@ function validatePhotos(photos: unknown): AnalysisPhotoInput[] {
   return photos as AnalysisPhotoInput[];
 }
 
-export function createAnalysisJobService(dataDir: string) {
+export function createAnalysisJobService(dataDir: string, options: AnalysisJobServiceOptions = {}) {
   const rootDir = path.resolve(dataDir);
+  const gpuCandidateLimit = Math.max(0, options.gpuCandidateLimit ?? 240);
 
   function jobDir(jobId: string) {
     return path.join(rootDir, safeSegment(jobId));
@@ -266,6 +278,125 @@ export function createAnalysisJobService(dataDir: string) {
     return undefined;
   }
 
+  async function gpuCandidateAssets(job: StoredAnalysisJob, photos: AnalysisPhotoInput[]): Promise<GpuFeatureAsset[]> {
+    if (!options.gpuClient || gpuCandidateLimit <= 0) {
+      return [];
+    }
+
+    const preliminaryResult = analyzeTripPhotos({
+      feedProfile: job.feedProfile,
+      jobId: `${job.jobId}-cpu-preselect`,
+      options: {
+        ...job.options,
+        topPoolSize: Math.max(gpuCandidateLimit, job.options?.topPoolSize ?? 0),
+      },
+      photos,
+      projectId: job.projectId,
+    });
+    const candidateIds = new Set(preliminaryResult.topPicks.slice(0, gpuCandidateLimit).map((pick) => pick.photoId));
+    const candidates: GpuFeatureAsset[] = [];
+
+    for (const photo of photos) {
+      if (!candidateIds.has(photo.photoId)) {
+        continue;
+      }
+
+      const imagePath = await findAssetPath(job.jobId, photo.photoId);
+
+      if (imagePath) {
+        candidates.push({
+          imagePath,
+          mimeType: 'image/jpeg',
+          photo,
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  async function enrichWithGpuFeatures(job: StoredAnalysisJob, photos: AnalysisPhotoInput[]) {
+    if (!options.gpuClient) {
+      return {
+        gpuAnalyzedAssetCount: 0,
+        gpuFeatureCount: 0,
+        photos,
+      };
+    }
+
+    const assets = await gpuCandidateAssets(job, photos);
+
+    if (!assets.length) {
+      logAnalysisJob('analysis.gpu.skipped', {
+        jobId: job.jobId,
+        projectId: job.projectId,
+        reason: 'no_uploaded_candidate_assets',
+      });
+
+      return {
+        gpuAnalyzedAssetCount: 0,
+        gpuFeatureCount: 0,
+        photos,
+      };
+    }
+
+    job.stage = 'gpu_vision';
+    job.progress = Math.max(job.progress, 0.74);
+    job.updatedAt = nowIso();
+    await saveJob(job);
+    logAnalysisJob('analysis.gpu.started', {
+      candidateAssetCount: assets.length,
+      candidateLimit: gpuCandidateLimit,
+      jobId: job.jobId,
+      projectId: job.projectId,
+      provider: options.gpuClient.provider,
+    });
+
+    try {
+      const features = await options.gpuClient.analyzeBatch({
+        assets,
+        jobId: job.jobId,
+        projectId: job.projectId,
+      });
+      const featuresByPhotoId = new Map(features.map((feature) => [feature.photoId, feature]));
+      const nextPhotos = photos.map((photo) => {
+        const feature = featuresByPhotoId.get(photo.photoId);
+        return feature ? mergeGpuFeature(photo, feature) : photo;
+      });
+
+      job.progress = Math.max(job.progress, 0.82);
+      job.updatedAt = nowIso();
+      await saveJob(job);
+      logAnalysisJob('analysis.gpu.completed', {
+        candidateAssetCount: assets.length,
+        featureCount: features.length,
+        jobId: job.jobId,
+        projectId: job.projectId,
+        provider: options.gpuClient.provider,
+      });
+
+      return {
+        gpuAnalyzedAssetCount: assets.length,
+        gpuFeatureCount: features.length,
+        photos: nextPhotos,
+      };
+    } catch (error) {
+      logAnalysisJob('analysis.gpu.failed', {
+        candidateAssetCount: assets.length,
+        error: error instanceof Error ? error.message : 'GPU feature extraction failed.',
+        jobId: job.jobId,
+        projectId: job.projectId,
+        provider: options.gpuClient.provider,
+      });
+
+      return {
+        gpuAnalyzedAssetCount: 0,
+        gpuFeatureCount: 0,
+        photos,
+      };
+    }
+  }
+
   async function startJob(jobId: string) {
     const job = await readJob(jobId);
     const startedAt = nowIso();
@@ -284,7 +415,7 @@ export function createAnalysisJobService(dataDir: string) {
     });
 
     try {
-      const enrichedPhotos: AnalysisPhotoInput[] = [];
+      let enrichedPhotos: AnalysisPhotoInput[] = [];
       let analyzedAssetCount = 0;
 
       for (const [index, photo] of job.photos.entries()) {
@@ -302,6 +433,9 @@ export function createAnalysisJobService(dataDir: string) {
         job.updatedAt = nowIso();
         await saveJob(job);
       }
+
+      const gpuResult = await enrichWithGpuFeatures(job, enrichedPhotos);
+      enrichedPhotos = gpuResult.photos;
 
       job.stage = 'ranking';
       job.progress = 0.82;
@@ -332,6 +466,8 @@ export function createAnalysisJobService(dataDir: string) {
       await saveJob(job);
       logAnalysisJob('analysis.job.completed', {
         analyzedAssetCount,
+        gpuAnalyzedAssetCount: gpuResult.gpuAnalyzedAssetCount,
+        gpuFeatureCount: gpuResult.gpuFeatureCount,
         jobId,
         modelVersion: result.modelVersion,
         projectId: job.projectId,

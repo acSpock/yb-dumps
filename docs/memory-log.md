@@ -2,6 +2,49 @@
 
 This file is the handoff source for future Trip Picks threads. Keep it current when architecture, product scope, or implementation boundaries change.
 
+## 2026-06-14 - Optional GPU Refinement Stage
+
+### Product/Architecture Decision
+
+- The production-quality model path should be a funnel, not GPU inference over every selected image.
+- Render CPU still processes every uploaded resized analysis image for hashes, blur/exposure/color, and cheap visual vectors.
+- The API then runs a preliminary CPU rank and sends only capped top candidates to an optional GPU feature endpoint.
+- GPU is disabled by default. If `GPU_FEATURES_URL` is unset or the GPU endpoint fails, the job completes with CPU features.
+- The final `/analysis/rank` composer remains the contract owner for carousel construction and feed-fit scoring.
+
+### Implementation Done
+
+- Added `services/api/src/gpuFeatures.ts` with a provider-neutral HTTP GPU client.
+- Added GPU env controls:
+  - `GPU_FEATURES_URL`
+  - `GPU_FEATURES_TOKEN`
+  - `GPU_CANDIDATE_LIMIT`
+  - `GPU_BATCH_SIZE`
+  - `GPU_TIMEOUT_MS`
+- Added `gpu_vision` as an analysis job stage.
+- Added `modelSource` and `modelProvider` to analysis photo inputs.
+- Updated `services/api/src/analysisJobs.ts` so job start now runs:
+  - CPU vision over uploaded analysis images
+  - preliminary CPU ranking for candidate selection
+  - optional GPU batch feature extraction for candidate assets
+  - final ranking/composition
+- Updated `services/api/src/modelRanker.ts` to return `gpu-vision-curation-v0.1.0` when GPU features are merged.
+- Added `services/gpu-worker/README.md` documenting the worker request/response contract for Modal, Runpod, or another GPU host.
+- Updated mobile progress copy to mention GPU refinement when configured.
+
+### Validation
+
+- `npm run typecheck` passes in `services/api`.
+- `npm run typecheck` passes in `apps/mobile`.
+- `npm test` passes in `services/api` with 19 tests.
+- Added an API integration test with a fake GPU client verifying candidate capping, GPU feature merge, and `gpu-vision-curation-v0.1.0`.
+
+### Known Gaps
+
+- No real Modal/Runpod worker is deployed yet; the API side and contract are ready.
+- GPU payloads currently use base64 resized images over JSON. Object storage URLs should replace this before heavy usage.
+- `/analysis/jobs/:jobId/start` is still synchronous. A queue/worker should replace it before real large-batch production usage.
+
 ## 2026-06-13 - Drag-Range Trip Photo Picker
 
 ### Product/Architecture Decision

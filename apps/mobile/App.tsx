@@ -75,6 +75,7 @@ const analysisSteps = [
   { label: 'Preparing analysis copies', detail: 'Creating resized JPEG copies for CPU vision. Originals stay on this device.' },
   { label: 'Uploading resized copies', detail: 'Sending temporary 1024px analysis files to the server job.' },
   { label: 'Running CPU vision', detail: 'Measuring blur, exposure, color, perceptual hashes, and visual variety.' },
+  { label: 'Refining best candidates', detail: 'Using GPU embeddings for the strongest CPU-filtered photos when available.' },
   { label: 'Ranking the strongest 50', detail: 'Scoring quality, moments, people, place, duplicates, and variety.' },
   { label: 'Composing carousel options', detail: 'Building finished edits with single-photo and multi-photo slides.' },
   { label: 'Checking feed preview', detail: 'Finding the photo that best fits your imported grid.' },
@@ -481,7 +482,9 @@ export default function App() {
             projectId: project.projectId,
           });
           result = cpuResponse.result;
-          completionMessage = cpuResponse.usedCpuVision
+          completionMessage = result.modelVersion.startsWith('gpu-vision')
+            ? `GPU refinement complete. Processed ${cpuResponse.uploadedAssetCount} resized analysis ${cpuResponse.uploadedAssetCount === 1 ? 'copy' : 'copies'} after CPU filtering; originals stayed on this device.`
+            : cpuResponse.usedCpuVision
             ? `CPU vision complete. Processed ${cpuResponse.uploadedAssetCount} resized analysis ${cpuResponse.uploadedAssetCount === 1 ? 'copy' : 'copies'}; originals stayed on this device.`
             : 'CPU job completed without image copies, so the backend used metadata fallback ranking.';
         } catch (error) {

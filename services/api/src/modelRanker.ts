@@ -18,6 +18,7 @@ import {
 
 const HEURISTIC_MODEL_VERSION = 'heuristic-curation-v0.1.0';
 const CPU_VISION_MODEL_VERSION = 'cpu-vision-curation-v0.1.0';
+const GPU_VISION_MODEL_VERSION = 'gpu-vision-curation-v0.1.0';
 const EMBEDDING_SIZE = 32;
 const DEFAULT_TOP_POOL_SIZE = 50;
 const DEFAULT_CAROUSEL_MAX_SLIDES = 20;
@@ -1294,6 +1295,10 @@ function warningsFor(request: AnalysisRankRequest, features: PhotoFeature[]) {
 }
 
 function modelVersionFor(request: AnalysisRankRequest) {
+  if (request.photos.some((photo) => photo.modelSource === 'gpu')) {
+    return GPU_VISION_MODEL_VERSION;
+  }
+
   return request.photos.some((photo) =>
     Boolean(photo.perceptualHash || photo.visualEmbedding?.length || photo.modelQualitySignals || photo.modelLabels?.length),
   )

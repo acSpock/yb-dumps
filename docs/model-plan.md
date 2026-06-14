@@ -146,7 +146,7 @@ Move selective pieces on-device later:
 - obvious duplicate detection
 - possibly a compact aesthetic/personal ranker
 
-## Implemented CPU-First Pipeline
+## Implemented CPU-First Pipeline With Optional GPU Refinement
 
 The current server-side prototype is implemented in `services/api` rather than a separate worker process:
 
@@ -159,12 +159,15 @@ The current server-side prototype is implemented in `services/api` rather than a
 - `services/api/src/analysisContracts.ts`
 - `services/api/src/analysisJobs.ts`
 - `services/api/src/cpuVision.ts`
+- `services/api/src/gpuFeatures.ts`
 - `services/api/src/modelRanker.ts`
+- `services/gpu-worker/README.md`
 
-There are now two model versions:
+There are now three model versions:
 
 - `heuristic-curation-v0.1.0` for metadata-only `/analysis/rank`.
 - `cpu-vision-curation-v0.1.0` when resized image uploads produce CPU pixel features.
+- `gpu-vision-curation-v0.1.0` when an optional GPU endpoint returns features for CPU-selected candidates.
 
 The CPU path is not a trained neural model yet. It is a cheaper first step that feeds better real-image features into the same ranking/composition layer:
 
@@ -179,9 +182,26 @@ The CPU path is not a trained neural model yet. It is a cheaper first step that 
 - prefers horizontal photos for stacked layered templates
 - scores feed-fit from palette, brightness, subject mix, crop suitability, and optional feed embeddings
 
+The GPU path is an optional second stage:
+
+- CPU analyzes every uploaded analysis image.
+- The API runs a preliminary CPU rank and candidate cap.
+- Only the strongest candidates with uploaded assets are sent to `GPU_FEATURES_URL`.
+- Returned embeddings, aesthetic scores, labels, and quality signals are merged back into the final ranking input.
+- GPU failure falls back to CPU results rather than failing the trip.
+
+GPU env controls:
+
+- `GPU_FEATURES_URL`
+- `GPU_FEATURES_TOKEN`
+- `GPU_CANDIDATE_LIMIT`
+- `GPU_BATCH_SIZE`
+- `GPU_TIMEOUT_MS`
+
 Next model step:
 
 - Add an async worker/queue instead of synchronous `start`.
-- Add CLIP/DINO-style embeddings and NIMA-style quality/aesthetic signals behind the existing `visualEmbedding`/model-signal contract.
+- Deploy a Modal or Runpod worker that implements `services/gpu-worker/README.md`.
+- Add CLIP/SigLIP/DINO-style embeddings and NIMA-style quality/aesthetic signals behind the existing GPU feature contract.
 - Add CPU feed-image analysis for imported grid screenshots/recent posts.
 - Keep `/analysis/rank` as the composition/ranking layer so the mobile app contract stays stable.

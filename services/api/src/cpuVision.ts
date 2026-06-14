@@ -316,6 +316,7 @@ export async function analyzeImageAsset(input: {
       ...colorProfileForStats(stats),
     },
     modelLabels: [...new Set([...(input.photo.modelLabels ?? []), ...labelsForStats(photo, stats)])],
+    modelSource: input.photo.modelSource ?? 'cpu',
     modelQualitySignals: {
       ...input.photo.modelQualitySignals,
       ...qualitySignalsForStats(stats),

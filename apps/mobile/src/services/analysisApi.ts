@@ -43,7 +43,7 @@ type FeedProfileAssetInput = {
 };
 
 type AnalysisJobResponse = Omit<AnalysisJob, 'stage'> & {
-  stage: AnalysisJob['stage'] | 'created' | 'uploads' | 'cpu_vision' | 'cleanup';
+  stage: AnalysisJob['stage'] | 'created' | 'uploads' | 'cpu_vision' | 'gpu_vision' | 'cleanup';
 };
 
 type AnalysisJobStartResponse = {

@@ -62,6 +62,7 @@ Current analysis flow:
 - Mobile creates max-1024px JPEG analysis copies with `expo-image-manipulator` and uploads those temporary copies to the API.
 - Originals stay on the phone.
 - The API deletes temporary analysis images after job success or failure.
+- The API can optionally send only CPU-filtered candidates to a GPU feature endpoint before final ranking.
 - If CPU job creation/start fails, mobile falls back to `POST /analysis/rank`.
 - Mobile sends photo metadata, deterministic prototype labels/color signals/quality signals, feed-import assets when available, and ranking options.
 - The server returns the app-facing `RankingResult` and mobile persists it into the local saved-trip snapshot.
@@ -88,6 +89,12 @@ Keep boring:
   - `GET /analysis/jobs/:jobId/result`
 - Dev token storage is a gitignored JSON file under `services/api/data`.
 - Temporary analysis images live under `services/api/data/analysis-jobs` by default and are deleted after completion.
+- Optional GPU feature extraction is controlled by:
+  - `GPU_FEATURES_URL`
+  - `GPU_FEATURES_TOKEN`
+  - `GPU_CANDIDATE_LIMIT`
+  - `GPU_BATCH_SIZE`
+  - `GPU_TIMEOUT_MS`
 - Production backend should still move to Postgres, object storage for uploaded/rendered images, and a queue for model jobs.
 
 Core tables:
@@ -125,10 +132,13 @@ Current implementation:
 
 - `services/api/src/analysisContracts.ts` defines the API-side ranking/result contract.
 - `services/api/src/cpuVision.ts` implements `sharp`-based CPU feature extraction.
+- `services/api/src/gpuFeatures.ts` implements the optional provider-neutral GPU feature client.
 - `services/api/src/analysisJobs.ts` implements file-backed MVP analysis jobs.
-- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0` and `cpu-vision-curation-v0.1.0`.
+- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0`, `cpu-vision-curation-v0.1.0`, and `gpu-vision-curation-v0.1.0`.
 - `POST /analysis/rank` accepts metadata, labels, color profiles, optional embeddings, optional quality/aesthetic signals, and optional feed-profile assets.
 - The job flow accepts resized JPEG analysis images and enriches photo inputs with `perceptualHash`, `visualEmbedding`, `modelLabels`, and `modelQualitySignals`.
+- If `GPU_FEATURES_URL` is configured, the job flow runs a preliminary CPU rank, caps candidates, POSTs candidate analysis images to the GPU endpoint, merges returned embeddings/scores, and then runs final ranking.
+- If the GPU endpoint fails, the job logs `analysis.gpu.failed` and continues with CPU features.
 - The current ranker/composer is intentionally deterministic:
   - score quality, aesthetics, coverage, and feed fit
   - detect exact/near duplicates from source ids, perceptual hashes, embeddings, and moment/time proximity
@@ -136,6 +146,23 @@ Current implementation:
   - compose up to 3 carousel variations capped at 20 slides
   - prefer landscape/square photos for stacked `vertical_triptych` templates
 - Later real ML should replace feature extraction, not the whole result contract.
+
+## GPU Worker
+
+The optional worker contract is documented in `services/gpu-worker/README.md`.
+
+Provider recommendation:
+
+- Use Modal or Runpod serverless first.
+- Keep the worker stateless.
+- Return one feature object per `photoId`.
+- Start with CLIP/SigLIP/DINO-style embeddings plus an aesthetic/quality head.
+- Do not host the final ranker/composer in the GPU worker; keep that in `services/api`.
+
+Current limitation:
+
+- The API sends candidate resized images as base64 JSON for simplicity.
+- Object storage URLs or signed asset URLs should replace base64 before larger friend/family tests.
 
 The carousel composer should not only sort images. It should select and arrange slides under constraints:
 

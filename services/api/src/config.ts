@@ -4,6 +4,11 @@ import path from 'node:path';
 export type Config = {
   analysisDataDir: string;
   apiPublicUrl: string;
+  gpuBatchSize: number;
+  gpuCandidateLimit: number;
+  gpuFeaturesToken?: string;
+  gpuFeaturesUrl?: string;
+  gpuTimeoutMs: number;
   instagramScopes: string[];
   metaAppId?: string;
   metaAppSecret?: string;
@@ -52,6 +57,11 @@ export function readConfig(): Config {
   return {
     analysisDataDir: process.env.ANALYSIS_DATA_DIR ?? path.resolve(process.cwd(), 'data', 'analysis-jobs'),
     apiPublicUrl,
+    gpuBatchSize: Number(process.env.GPU_BATCH_SIZE ?? '24'),
+    gpuCandidateLimit: Number(process.env.GPU_CANDIDATE_LIMIT ?? '240'),
+    gpuFeaturesToken: process.env.GPU_FEATURES_TOKEN,
+    gpuFeaturesUrl: process.env.GPU_FEATURES_URL,
+    gpuTimeoutMs: Number(process.env.GPU_TIMEOUT_MS ?? '120000'),
     instagramScopes: (process.env.INSTAGRAM_SCOPES ?? 'instagram_business_basic,instagram_business_content_publish')
       .split(',')
       .map((scope) => scope.trim())

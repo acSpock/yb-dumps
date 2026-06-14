@@ -4,6 +4,7 @@ import { URL } from 'node:url';
 import { AnalysisRankRequest } from './analysisContracts.js';
 import { AnalysisJobService, createAnalysisJobService } from './analysisJobs.js';
 import { createMetaClient, MetaClient } from './metaClient.js';
+import { createGpuFeatureClient } from './gpuFeatures.js';
 import { analyzeTripPhotos } from './modelRanker.js';
 import { createOAuthState, decodeOAuthState } from './oauthState.js';
 import { hasMetaCredentials, readConfig } from './config.js';
@@ -368,7 +369,11 @@ function isRecord(value: unknown): value is JsonRecord {
 }
 
 export function createApiServer(context: AppContext) {
-  const analysisJobs = context.analysisJobs ?? createAnalysisJobService(config.analysisDataDir);
+  const gpuClient = createGpuFeatureClient(config);
+  const analysisJobs = context.analysisJobs ?? createAnalysisJobService(config.analysisDataDir, {
+    gpuCandidateLimit: config.gpuCandidateLimit,
+    gpuClient,
+  });
   let requestCounter = 0;
 
   return http.createServer((request, response) => {
