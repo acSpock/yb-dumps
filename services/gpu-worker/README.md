@@ -63,6 +63,29 @@ GPU_TIMEOUT_MS=120000
 
 `GPU_FEATURES_TOKEN` in the API must match `GPU_WORKER_TOKEN` in this worker.
 
+These are not vendor-issued tokens. Generate one random shared secret yourself and put the same value in both places:
+
+```bash
+openssl rand -hex 32
+```
+
+Do not commit this token to Git.
+
+## GHCR Image Build
+
+The repo includes `.github/workflows/gpu-worker-image.yml`.
+
+On every push that changes `services/gpu-worker/**`, GitHub Actions builds and pushes:
+
+```bash
+ghcr.io/acspock/yb-dumps-gpu-worker:latest
+ghcr.io/acspock/yb-dumps-gpu-worker:sha-<commit>
+```
+
+The workflow preloads model weights into the image by default. You can also run the workflow manually and set `preload_model=false` if the build image gets too large or the model download is timing out.
+
+Runpod needs to be able to pull the image. If the GHCR package is private, either make the package public or add GHCR registry credentials in Runpod.
+
 ## Local Docker
 
 Build:

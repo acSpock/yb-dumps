@@ -33,6 +33,8 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 - The worker uses PyTorch + Transformers with `openai/clip-vit-base-patch32` by default, auto-selects CUDA when available, and returns CLIP embeddings plus heuristic quality/color signals.
 - The worker Dockerfile preloads model files at image build by default via `scripts/download_model.py`, with startup/first-request download fallback through `from_pretrained`.
 - Added `services/gpu-worker/README.md` documenting model download behavior, env vars, local Docker usage, and the request/response contract for Modal, Runpod, or another GPU host.
+- Added `.github/workflows/gpu-worker-image.yml` to build and push `ghcr.io/acspock/yb-dumps-gpu-worker` on GPU worker changes or manual dispatch.
+- `GPU_WORKER_TOKEN` and `GPU_FEATURES_TOKEN` are the same operator-generated shared secret; they are not issued by Runpod.
 - Updated mobile progress copy to mention GPU refinement when configured.
 
 ### Validation
