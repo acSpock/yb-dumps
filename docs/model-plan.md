@@ -189,6 +189,9 @@ The GPU path is an optional second stage:
 - Only the strongest candidates with uploaded assets are sent to `GPU_FEATURES_URL`.
 - Returned embeddings, aesthetic scores, labels, and quality signals are merged back into the final ranking input.
 - GPU failure falls back to CPU results rather than failing the trip.
+- `services/gpu-worker` now contains a Dockerized FastAPI/PyTorch/Transformers worker.
+- The worker downloads `GPU_MODEL_ID` during Docker build by default, and can also load/download at startup or first request.
+- The first worker returns CLIP embeddings plus heuristic quality/color/aesthetic signals. A trained aesthetic head remains future work.
 
 GPU env controls:
 
@@ -201,7 +204,7 @@ GPU env controls:
 Next model step:
 
 - Add an async worker/queue instead of synchronous `start`.
-- Deploy a Modal or Runpod worker that implements `services/gpu-worker/README.md`.
-- Add CLIP/SigLIP/DINO-style embeddings and NIMA-style quality/aesthetic signals behind the existing GPU feature contract.
+- Deploy `services/gpu-worker` to Modal, Runpod, or another GPU HTTPS endpoint and set `GPU_FEATURES_URL` on Render.
+- Add a NIMA-style quality/aesthetic head behind the existing GPU feature contract.
 - Add CPU feed-image analysis for imported grid screenshots/recent posts.
 - Keep `/analysis/rank` as the composition/ranking layer so the mobile app contract stays stable.

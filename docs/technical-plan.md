@@ -149,14 +149,18 @@ Current implementation:
 
 ## GPU Worker
 
-The optional worker contract is documented in `services/gpu-worker/README.md`.
+The optional worker implementation and contract are documented in `services/gpu-worker/README.md`.
 
 Provider recommendation:
 
 - Use Modal or Runpod serverless first.
 - Keep the worker stateless.
 - Return one feature object per `photoId`.
-- Start with CLIP/SigLIP/DINO-style embeddings plus an aesthetic/quality head.
+- Current implementation is a Dockerized FastAPI service using PyTorch + Transformers.
+- Default model is `openai/clip-vit-base-patch32`.
+- The Docker build preloads model files with `scripts/download_model.py`; startup/first-request loading can also download weights through `from_pretrained`.
+- The worker currently returns CLIP embeddings plus heuristic image quality/color/aesthetic signals.
+- A dedicated aesthetic/quality head is future work.
 - Do not host the final ranker/composer in the GPU worker; keep that in `services/api`.
 
 Current limitation:

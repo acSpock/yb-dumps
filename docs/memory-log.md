@@ -29,7 +29,10 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
   - optional GPU batch feature extraction for candidate assets
   - final ranking/composition
 - Updated `services/api/src/modelRanker.ts` to return `gpu-vision-curation-v0.1.0` when GPU features are merged.
-- Added `services/gpu-worker/README.md` documenting the worker request/response contract for Modal, Runpod, or another GPU host.
+- Added a deployable Python FastAPI worker under `services/gpu-worker`.
+- The worker uses PyTorch + Transformers with `openai/clip-vit-base-patch32` by default, auto-selects CUDA when available, and returns CLIP embeddings plus heuristic quality/color signals.
+- The worker Dockerfile preloads model files at image build by default via `scripts/download_model.py`, with startup/first-request download fallback through `from_pretrained`.
+- Added `services/gpu-worker/README.md` documenting model download behavior, env vars, local Docker usage, and the request/response contract for Modal, Runpod, or another GPU host.
 - Updated mobile progress copy to mention GPU refinement when configured.
 
 ### Validation
@@ -41,8 +44,9 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 
 ### Known Gaps
 
-- No real Modal/Runpod worker is deployed yet; the API side and contract are ready.
+- No real Modal/Runpod endpoint is deployed yet; the worker code is ready to containerize and deploy.
 - GPU payloads currently use base64 resized images over JSON. Object storage URLs should replace this before heavy usage.
+- The worker currently uses CLIP embeddings plus heuristic image quality. A dedicated aesthetic model/head remains future work.
 - `/analysis/jobs/:jobId/start` is still synchronous. A queue/worker should replace it before real large-batch production usage.
 
 ## 2026-06-13 - Drag-Range Trip Photo Picker

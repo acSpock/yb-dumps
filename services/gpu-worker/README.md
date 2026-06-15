@@ -1,8 +1,89 @@
-# Trip Picks GPU Feature Worker Contract
+# Trip Picks GPU Feature Worker
 
-This folder documents the optional second-stage GPU worker used by `services/api`.
+This is the optional second-stage worker for the Trip Picks analysis pipeline.
 
-The worker is not required for the MVP to run. If `GPU_FEATURES_URL` is unset, the API uses CPU-only analysis. When configured, the API sends only CPU-filtered candidate images to this endpoint.
+`services/api` still owns uploads, job state, CPU filtering, final ranking, and cleanup. This worker only receives CPU-selected candidate images and returns neural image embeddings plus quality/color signals.
+
+If the API has no `GPU_FEATURES_URL`, the product continues to run CPU-only.
+
+## What It Runs
+
+- FastAPI HTTP service.
+- PyTorch + Transformers.
+- Default model: `openai/clip-vit-base-patch32`.
+- CUDA automatically when available, CPU otherwise.
+- CLIP image embeddings for each candidate image.
+- Heuristic quality/color/aesthetic signals from pixel stats.
+
+The aesthetic score is not a trained NIMA-style aesthetic head yet. It is a useful bridge score until we add a dedicated aesthetic model.
+
+## Model Download Behavior
+
+Yes, the worker downloads model files.
+
+There are two paths:
+
+1. Docker image build preload:
+   - `Dockerfile` runs `python scripts/download_model.py` by default.
+   - This downloads `GPU_MODEL_ID` into `GPU_MODEL_CACHE_DIR`.
+   - The deployed image starts faster because weights are already cached.
+
+2. Runtime fallback:
+   - On startup, `GPU_PRELOAD_MODEL_ON_STARTUP=true` calls `from_pretrained`.
+   - If the model was not baked into the image, Transformers downloads it into the cache.
+   - If startup preload is disabled, the first `/features` request lazily loads/downloads the model.
+
+For friend/family testing, prefer build preload so the first real trip does not wait on a model download.
+
+## Environment
+
+Worker env:
+
+```bash
+GPU_WORKER_TOKEN=change-me
+GPU_MODEL_ID=openai/clip-vit-base-patch32
+GPU_MODEL_CACHE_DIR=/models/huggingface
+GPU_MODEL_DEVICE=auto
+GPU_MODEL_DTYPE=auto
+GPU_BATCH_SIZE=24
+GPU_MAX_ASSETS=256
+GPU_PRELOAD_MODEL_ON_STARTUP=true
+PORT=8080
+```
+
+API env on Render:
+
+```bash
+GPU_FEATURES_URL=https://your-gpu-worker.example.com/features
+GPU_FEATURES_TOKEN=change-me
+GPU_CANDIDATE_LIMIT=240
+GPU_BATCH_SIZE=24
+GPU_TIMEOUT_MS=120000
+```
+
+`GPU_FEATURES_TOKEN` in the API must match `GPU_WORKER_TOKEN` in this worker.
+
+## Local Docker
+
+Build:
+
+```bash
+docker build -t trip-picks-gpu-worker services/gpu-worker
+```
+
+Run:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e GPU_WORKER_TOKEN=dev-token \
+  trip-picks-gpu-worker
+```
+
+Health check:
+
+```bash
+curl http://localhost:8080/health
+```
 
 ## API Request
 
@@ -11,7 +92,7 @@ The worker is not required for the MVP to run. If `GPU_FEATURES_URL` is unset, t
 Headers:
 
 - `content-type: application/json`
-- `authorization: Bearer <GPU_FEATURES_TOKEN>` when configured
+- `authorization: Bearer <GPU_WORKER_TOKEN>` when configured
 
 Body:
 
@@ -37,18 +118,20 @@ Body:
 
 ```json
 {
-  "modelProvider": "modal-siglip-aesthetic-v0",
-  "modelVersion": "siglip-dino-aesthetic-v0.1.0",
+  "modelProvider": "trip-picks-gpu-worker",
+  "modelVersion": "openai--clip-vit-base-patch32-image-embedding-v0.1.0",
   "features": [
     {
       "photoId": "photo-1",
       "embedding": [0.01, 0.02],
       "aestheticScore": 0.88,
-      "modelLabels": ["landscape", "editorial"],
+      "modelLabels": ["landscape", "neural_embedding", "warm"],
       "modelQualitySignals": {
         "sharpness": 0.91,
         "exposure": 0.84,
-        "subjectCentered": 0.72
+        "noise": 0.12,
+        "subjectCentered": 0.72,
+        "contrast": 0.61
       },
       "colorProfile": {
         "brightness": 0.58,
@@ -61,24 +144,12 @@ Body:
 }
 ```
 
-## API Environment
+## Deploy Notes
 
-Configure these in `services/api`:
+Use a GPU service that can deploy a Docker image and expose HTTPS:
 
-- `GPU_FEATURES_URL`: worker HTTPS endpoint.
-- `GPU_FEATURES_TOKEN`: optional bearer token.
-- `GPU_CANDIDATE_LIMIT`: max CPU-selected photos sent to GPU, default `240`.
-- `GPU_BATCH_SIZE`: assets per HTTP call, default `24`.
-- `GPU_TIMEOUT_MS`: timeout per batch, default `120000`.
+- Runpod serverless endpoint or pod.
+- Modal web endpoint using the same app code/image.
+- Any GPU VM with Docker and HTTPS routing.
 
-## First Worker Recommendation
-
-Use Modal or Runpod serverless first. The worker should:
-
-- decode JPEG analysis copies
-- batch inference on GPU
-- produce CLIP/SigLIP or DINO-style embeddings
-- optionally run an aesthetic/quality head
-- return one feature object per `photoId`
-
-Keep the worker stateless. The API owns job state, cleanup, final ranking, and carousel composition.
+The current API sends candidate images as base64 JSON. That is acceptable for a first deployment because only CPU-filtered candidates are sent. For heavier friend/family usage, move candidate images to object storage and send signed URLs instead.
