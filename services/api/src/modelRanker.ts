@@ -1306,6 +1306,66 @@ function modelVersionFor(request: AnalysisRankRequest) {
     : HEURISTIC_MODEL_VERSION;
 }
 
+function roundDebugNumber(value: number | undefined) {
+  return Number.isFinite(value) ? Math.round((value ?? 0) * 1000) / 1000 : undefined;
+}
+
+function debugPickFor(
+  pick: RankedPick,
+  featureByPhotoId: Map<string, PhotoFeature>,
+) {
+  const feature = featureByPhotoId.get(pick.photoId);
+
+  return {
+    aestheticScore: roundDebugNumber(feature?.aestheticScore),
+    finalScore: roundDebugNumber(pick.finalScore),
+    modelLabels: feature?.photo.modelLabels?.slice(0, 8),
+    modelProvider: feature?.photo.modelProvider,
+    modelSource: feature?.photo.modelSource ?? (feature?.photo.perceptualHash ? 'cpu' : 'metadata'),
+    photoId: pick.photoId,
+    qualityFlags: feature?.qualityFlags,
+    qualityScore: roundDebugNumber(feature?.qualityScore),
+    rank: pick.rank,
+    reasons: pick.reasons,
+    sceneLabels: feature?.sceneLabels.slice(0, 8),
+  };
+}
+
+function finalDebugTrace(input: {
+  duplicateGroups: DuplicateGroup[];
+  feedAssetCount: number;
+  features: PhotoFeature[];
+  photoCount: number;
+  topPicks: RankedPick[];
+  variations: CarouselVariation[];
+  warnings: string[];
+}): RankingResult['debugTrace'] {
+  const featureByPhotoId = new Map(input.features.map((feature) => [feature.photo.photoId, feature]));
+
+  return {
+    final: {
+      carouselSlides: input.variations.map((variation) => ({
+        label: variation.label,
+        slides: variation.slides.map((slide) => ({
+          photoIds: slide.photoIds,
+          rank: slide.rank,
+          slideId: slide.slideId,
+          template: slide.template,
+        })),
+        variationId: variation.variationId,
+      })),
+      duplicateGroups: input.duplicateGroups,
+      topPicks: input.topPicks.slice(0, 20).map((pick) => debugPickFor(pick, featureByPhotoId)),
+      warnings: input.warnings,
+    },
+    input: {
+      feedAssetCount: input.feedAssetCount,
+      photoCount: input.photoCount,
+    },
+    pipeline: 'metadata-only',
+  };
+}
+
 export function analyzeTripPhotos(request: AnalysisRankRequest): RankingResult {
   validateRequest(request);
 
@@ -1318,11 +1378,23 @@ export function analyzeTripPhotos(request: AnalysisRankRequest): RankingResult {
   const selectedFeatures = selectDiverseFeatures(features, topPoolSize);
   const feedProfile = buildFeedProfile(request.feedProfile);
   const topPicks = rankedPicksFor(selectedFeatures);
+  const carouselVariations = composeCarouselVariations(selectedFeatures, variationCount, carouselMaxSlides);
+  const feedPreviewCandidates = scoreFeedFit(request.projectId, selectedFeatures, feedProfile);
+  const warnings = warningsFor(request, features);
 
   return {
-    carouselVariations: composeCarouselVariations(selectedFeatures, variationCount, carouselMaxSlides),
+    carouselVariations,
+    debugTrace: finalDebugTrace({
+      duplicateGroups,
+      features,
+      feedAssetCount: request.feedProfile?.assets.length ?? 0,
+      photoCount: request.photos.length,
+      topPicks,
+      variations: carouselVariations,
+      warnings,
+    }),
     duplicateGroups,
-    feedPreviewCandidates: scoreFeedFit(request.projectId, selectedFeatures, feedProfile),
+    feedPreviewCandidates,
     generatedAt,
     jobId: request.jobId ?? `analysis-${request.projectId}`,
     modelVersion: modelVersionFor(request),
@@ -1330,6 +1402,6 @@ export function analyzeTripPhotos(request: AnalysisRankRequest): RankingResult {
     projectId: request.projectId,
     resultId: `result-${request.projectId}-${Date.parse(generatedAt)}`,
     topPicks,
-    warnings: warningsFor(request, features),
+    warnings,
   };
 }

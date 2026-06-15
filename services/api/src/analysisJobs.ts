@@ -3,6 +3,8 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  AnalysisDebugPickSummary,
+  AnalysisDebugTrace,
   AnalysisPhotoInput,
   AnalysisRankRequest,
   FeedProfileInput,
@@ -10,6 +12,7 @@ import {
 } from './analysisContracts.js';
 import { analyzeImageAsset } from './cpuVision.js';
 import {
+  GpuFeature,
   GpuFeatureAsset,
   GpuFeatureClient,
   mergeGpuFeature,
@@ -81,6 +84,15 @@ type AnalysisJobServiceOptions = {
   gpuClient?: GpuFeatureClient;
 };
 
+type GpuDebugTrace = NonNullable<AnalysisDebugTrace['gpu']>;
+
+type GpuEnrichmentResult = {
+  debug: GpuDebugTrace;
+  gpuAnalyzedAssetCount: number;
+  gpuFeatureCount: number;
+  photos: AnalysisPhotoInput[];
+};
+
 function safeSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
 }
@@ -149,6 +161,67 @@ function validatePhotos(photos: unknown): AnalysisPhotoInput[] {
   }
 
   return photos as AnalysisPhotoInput[];
+}
+
+function roundDebugNumber(value: number | undefined) {
+  return Number.isFinite(value) ? Math.round((value ?? 0) * 1000) / 1000 : undefined;
+}
+
+function debugPicksFromResult(result: RankingResult, limit = 20): AnalysisDebugPickSummary[] {
+  return result.debugTrace?.final.topPicks.slice(0, limit) ?? result.topPicks.slice(0, limit).map((pick) => ({
+    finalScore: roundDebugNumber(pick.finalScore),
+    photoId: pick.photoId,
+    rank: pick.rank,
+    reasons: pick.reasons,
+  }));
+}
+
+function debugFeatureSummary(feature: GpuFeature): AnalysisDebugPickSummary {
+  return {
+    aestheticScore: roundDebugNumber(feature.aestheticScore),
+    modelLabels: feature.modelLabels?.slice(0, 8),
+    modelProvider: feature.modelProvider ?? feature.modelVersion,
+    modelSource: 'gpu',
+    photoId: feature.photoId,
+    qualityFlags: [
+      feature.modelQualitySignals?.sharpness !== undefined ? `sharpness ${roundDebugNumber(feature.modelQualitySignals.sharpness)}` : undefined,
+      feature.modelQualitySignals?.exposure !== undefined ? `exposure ${roundDebugNumber(feature.modelQualitySignals.exposure)}` : undefined,
+    ].filter((value): value is string => Boolean(value)),
+  };
+}
+
+function attachPipelineDebugTrace(input: {
+  analyzedAssetCount: number;
+  finalResult: RankingResult;
+  gpuDebug: GpuDebugTrace;
+  preliminaryResult: RankingResult;
+  uploadedAssetCount: number;
+}) {
+  const finalTrace = input.finalResult.debugTrace;
+
+  input.finalResult.debugTrace = {
+    ...finalTrace,
+    cpu: {
+      analyzedAssetCount: input.analyzedAssetCount,
+      preselectCandidateCount: input.preliminaryResult.topPicks.length,
+      preselectTopPicks: debugPicksFromResult(input.preliminaryResult, 20),
+      uploadedAssetCount: input.uploadedAssetCount,
+    },
+    final: finalTrace?.final ?? {
+      carouselSlides: [],
+      duplicateGroups: input.finalResult.duplicateGroups,
+      topPicks: debugPicksFromResult(input.finalResult, 20),
+      warnings: input.finalResult.warnings,
+    },
+    gpu: input.gpuDebug,
+    input: finalTrace?.input ?? {
+      feedAssetCount: 0,
+      photoCount: input.finalResult.photoScores.length,
+    },
+    pipeline: input.analyzedAssetCount > 0
+      ? input.gpuDebug.status === 'completed' ? 'cpu-gpu' : 'cpu-only'
+      : 'metadata-only',
+  };
 }
 
 export function createAnalysisJobService(dataDir: string, options: AnalysisJobServiceOptions = {}) {
@@ -278,21 +351,11 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
     return undefined;
   }
 
-  async function gpuCandidateAssets(job: StoredAnalysisJob, photos: AnalysisPhotoInput[]): Promise<GpuFeatureAsset[]> {
+  async function gpuCandidateAssets(job: StoredAnalysisJob, photos: AnalysisPhotoInput[], preliminaryResult: RankingResult): Promise<GpuFeatureAsset[]> {
     if (!options.gpuClient || gpuCandidateLimit <= 0) {
       return [];
     }
 
-    const preliminaryResult = analyzeTripPhotos({
-      feedProfile: job.feedProfile,
-      jobId: `${job.jobId}-cpu-preselect`,
-      options: {
-        ...job.options,
-        topPoolSize: Math.max(gpuCandidateLimit, job.options?.topPoolSize ?? 0),
-      },
-      photos,
-      projectId: job.projectId,
-    });
     const candidateIds = new Set(preliminaryResult.topPicks.slice(0, gpuCandidateLimit).map((pick) => pick.photoId));
     const candidates: GpuFeatureAsset[] = [];
 
@@ -315,16 +378,20 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
     return candidates;
   }
 
-  async function enrichWithGpuFeatures(job: StoredAnalysisJob, photos: AnalysisPhotoInput[]) {
+  async function enrichWithGpuFeatures(job: StoredAnalysisJob, photos: AnalysisPhotoInput[], preliminaryResult: RankingResult): Promise<GpuEnrichmentResult> {
     if (!options.gpuClient) {
       return {
+        debug: {
+          enabled: false,
+          status: 'not_configured',
+        },
         gpuAnalyzedAssetCount: 0,
         gpuFeatureCount: 0,
         photos,
       };
     }
 
-    const assets = await gpuCandidateAssets(job, photos);
+    const assets = await gpuCandidateAssets(job, photos, preliminaryResult);
 
     if (!assets.length) {
       logAnalysisJob('analysis.gpu.skipped', {
@@ -334,6 +401,12 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
       });
 
       return {
+        debug: {
+          candidateLimit: gpuCandidateLimit,
+          enabled: true,
+          provider: options.gpuClient.provider,
+          status: 'skipped',
+        },
         gpuAnalyzedAssetCount: 0,
         gpuFeatureCount: 0,
         photos,
@@ -376,6 +449,16 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
       });
 
       return {
+        debug: {
+          candidateCount: assets.length,
+          candidateLimit: gpuCandidateLimit,
+          candidatePhotoIds: assets.map((asset) => asset.photo.photoId),
+          enabled: true,
+          provider: options.gpuClient.provider,
+          returnedFeatureCount: features.length,
+          returnedFeatures: features.slice(0, 20).map(debugFeatureSummary),
+          status: 'completed',
+        },
         gpuAnalyzedAssetCount: assets.length,
         gpuFeatureCount: features.length,
         photos: nextPhotos,
@@ -390,6 +473,15 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
       });
 
       return {
+        debug: {
+          candidateCount: assets.length,
+          candidateLimit: gpuCandidateLimit,
+          candidatePhotoIds: assets.map((asset) => asset.photo.photoId),
+          enabled: true,
+          error: error instanceof Error ? error.message : 'GPU feature extraction failed.',
+          provider: options.gpuClient.provider,
+          status: 'failed',
+        },
         gpuAnalyzedAssetCount: 0,
         gpuFeatureCount: 0,
         photos,
@@ -434,7 +526,18 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
         await saveJob(job);
       }
 
-      const gpuResult = await enrichWithGpuFeatures(job, enrichedPhotos);
+      const preliminaryResult = analyzeTripPhotos({
+        feedProfile: job.feedProfile,
+        jobId: `${job.jobId}-cpu-preselect`,
+        options: {
+          ...job.options,
+          topPoolSize: Math.max(gpuCandidateLimit, job.options?.topPoolSize ?? 0),
+        },
+        photos: enrichedPhotos,
+        projectId: job.projectId,
+      });
+
+      const gpuResult = await enrichWithGpuFeatures(job, enrichedPhotos, preliminaryResult);
       enrichedPhotos = gpuResult.photos;
 
       job.stage = 'ranking';
@@ -448,6 +551,13 @@ export function createAnalysisJobService(dataDir: string, options: AnalysisJobSe
         options: job.options,
         photos: enrichedPhotos,
         projectId: job.projectId,
+      });
+      attachPipelineDebugTrace({
+        analyzedAssetCount,
+        finalResult: result,
+        gpuDebug: gpuResult.debug,
+        preliminaryResult,
+        uploadedAssetCount: job.uploadedAssetCount,
       });
 
       job.result = result;

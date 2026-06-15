@@ -39,6 +39,7 @@ import {
   publishInstagramCarousel,
 } from './src/services/instagramApi';
 import {
+  AnalysisDebugPickSummary,
   CarouselSlide,
   CarouselVariation,
   ExportStatus,
@@ -2192,6 +2193,8 @@ function ResultsScreen({
           </View>
         ) : null}
 
+        <AnalysisDebugPanel result={project.result} />
+
         {activeTab === 'carousel' ? (
           <CarouselTab
             photosById={photosById}
@@ -2218,6 +2221,202 @@ function ResultsScreen({
           />
         )}
       </ScrollView>
+    </View>
+  );
+}
+
+function AnalysisDebugPanel({ result }: { result: RankingResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const trace = result.debugTrace;
+
+  if (!trace) {
+    return null;
+  }
+
+  const duplicateExamples = trace.final.duplicateGroups.slice(0, 4);
+  const carouselSlides = trace.final.carouselSlides.flatMap((variation) => (
+    variation.slides.map((slide) => ({
+      ...slide,
+      label: variation.label,
+    }))
+  ));
+
+  return (
+    <View style={styles.debugPanel}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => setExpanded((currentValue) => !currentValue)}
+        style={({ pressed }) => [styles.debugHeader, pressed && styles.buttonPressed]}
+      >
+        <View style={styles.flexText}>
+          <Text style={styles.panelTitle}>Analysis trace</Text>
+          <Text style={styles.mutedText}>
+            {pipelineLabel(trace.pipeline)} · {result.modelVersion}
+          </Text>
+        </View>
+        <View style={styles.statusPill}>
+          <Text style={styles.statusPillText}>{expanded ? 'hide' : 'show'}</Text>
+        </View>
+      </Pressable>
+
+      {expanded ? (
+        <View style={styles.debugBody}>
+          <Text style={styles.bodyText}>
+            GPU today returns CLIP image embeddings plus quality and color signals. It does not run a true object classifier yet.
+          </Text>
+
+          <View style={styles.debugMetricGrid}>
+            <DebugMetric
+              label="input"
+              value={`${trace.input.photoCount.toLocaleString()} photos`}
+            />
+            <DebugMetric
+              label="uploaded"
+              value={`${trace.cpu?.uploadedAssetCount ?? 0}`}
+            />
+            <DebugMetric
+              label="CPU analyzed"
+              value={`${trace.cpu?.analyzedAssetCount ?? 0}`}
+            />
+            <DebugMetric
+              label="GPU status"
+              value={trace.gpu ? trace.gpu.status.replace(/_/g, ' ') : 'none'}
+            />
+          </View>
+
+          <DebugPickList
+            picks={trace.cpu?.preselectTopPicks ?? []}
+            title={`CPU preselect (${trace.cpu?.preselectCandidateCount ?? 0})`}
+          />
+
+          <View style={styles.debugSection}>
+            <Text style={styles.debugSectionTitle}>GPU enrichment</Text>
+            <Text style={styles.debugText}>
+              Provider: {trace.gpu?.provider ?? 'not configured'} · candidates: {trace.gpu?.candidateCount ?? 0}
+              /{trace.gpu?.candidateLimit ?? 0} · returned: {trace.gpu?.returnedFeatureCount ?? 0}
+            </Text>
+            {trace.gpu?.error ? (
+              <Text style={styles.debugErrorText}>{trace.gpu.error}</Text>
+            ) : null}
+            {trace.gpu?.candidatePhotoIds?.length ? (
+              <Text style={styles.debugText}>
+                Sent: {trace.gpu.candidatePhotoIds.slice(0, 18).join(', ')}
+              </Text>
+            ) : null}
+          </View>
+
+          <DebugPickList
+            picks={trace.gpu?.returnedFeatures ?? []}
+            title="GPU returned features"
+          />
+
+          <DebugPickList
+            picks={trace.final.topPicks}
+            title="Final top picks"
+          />
+
+          <View style={styles.debugSection}>
+            <Text style={styles.debugSectionTitle}>Duplicate groups</Text>
+            {duplicateExamples.length ? duplicateExamples.map((group) => (
+              <Text
+                key={group.groupId}
+                style={styles.debugText}
+              >
+                {group.duplicateType} {percent(group.confidence)} · best {group.bestPhotoId} · {group.photoIds.join(', ')}
+              </Text>
+            )) : (
+              <Text style={styles.debugText}>No duplicate groups were reported.</Text>
+            )}
+          </View>
+
+          <View style={styles.debugSection}>
+            <Text style={styles.debugSectionTitle}>Carousel slides</Text>
+            {carouselSlides.slice(0, 12).map((slide) => (
+              <Text
+                key={`${slide.label}-${slide.slideId}`}
+                style={styles.debugText}
+              >
+                {slide.label} #{slide.rank} · {templateLabel(slide.template)} · {slide.photoIds.join(', ')}
+              </Text>
+            ))}
+          </View>
+
+          {trace.final.warnings.length ? (
+            <View style={styles.debugSection}>
+              <Text style={styles.debugSectionTitle}>Warnings</Text>
+              {trace.final.warnings.map((warning) => (
+                <Text
+                  key={warning}
+                  style={styles.debugText}
+                >
+                  {warning}
+                </Text>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function DebugMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.debugMetric}>
+      <Text style={styles.debugMetricLabel}>{label}</Text>
+      <Text style={styles.debugMetricValue}>{value}</Text>
+    </View>
+  );
+}
+
+function DebugPickList({
+  picks,
+  title,
+}: {
+  picks: AnalysisDebugPickSummary[];
+  title: string;
+}) {
+  return (
+    <View style={styles.debugSection}>
+      <Text style={styles.debugSectionTitle}>{title}</Text>
+      {picks.length ? picks.slice(0, 10).map((pick) => (
+        <DebugPickRow
+          key={`${title}-${pick.photoId}-${pick.rank ?? 'feature'}`}
+          pick={pick}
+        />
+      )) : (
+        <Text style={styles.debugText}>No picks reported.</Text>
+      )}
+    </View>
+  );
+}
+
+function DebugPickRow({ pick }: { pick: AnalysisDebugPickSummary }) {
+  const labels = [
+    ...(pick.sceneLabels ?? []),
+    ...(pick.modelLabels ?? []),
+    ...(pick.qualityFlags ?? []),
+  ].slice(0, 8);
+  const scores = [
+    pick.finalScore !== undefined ? `final ${percent(pick.finalScore)}` : undefined,
+    pick.qualityScore !== undefined ? `quality ${percent(pick.qualityScore)}` : undefined,
+    pick.aestheticScore !== undefined ? `aesthetic ${percent(pick.aestheticScore)}` : undefined,
+  ].filter(Boolean);
+
+  return (
+    <View style={styles.debugPickRow}>
+      <Text style={styles.debugPickTitle}>
+        {pick.rank ? `#${pick.rank} ` : ''}{pick.photoId}
+      </Text>
+      <Text style={styles.debugText}>
+        {[pick.modelSource, pick.modelProvider, ...scores].filter(Boolean).join(' · ') || 'No score fields'}
+      </Text>
+      {pick.reasons?.length ? (
+        <Text style={styles.debugText}>{pick.reasons.join(' · ')}</Text>
+      ) : null}
+      {labels.length ? (
+        <Text style={styles.debugMutedText}>{labels.join(', ')}</Text>
+      ) : null}
     </View>
   );
 }
@@ -3199,6 +3398,18 @@ function formatShortDate(value?: string) {
   });
 }
 
+function pipelineLabel(pipeline: string) {
+  if (pipeline === 'cpu-gpu') {
+    return 'CPU preselect + GPU embeddings';
+  }
+
+  if (pipeline === 'cpu-only') {
+    return 'CPU vision only';
+  }
+
+  return 'Metadata fallback';
+}
+
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
@@ -3755,6 +3966,93 @@ const styles = StyleSheet.create({
     backgroundColor: '#E4F7F3',
     padding: 14,
     gap: 6,
+  },
+  debugPanel: {
+    borderWidth: 1,
+    borderColor: '#DCE2E8',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  debugHeader: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 14,
+  },
+  debugBody: {
+    borderTopWidth: 1,
+    borderTopColor: '#EEF1F4',
+    padding: 14,
+    gap: 14,
+  },
+  debugMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  debugMetric: {
+    minWidth: '47%',
+    flexGrow: 1,
+    borderWidth: 1,
+    borderColor: '#EEF1F4',
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 3,
+  },
+  debugMetricLabel: {
+    color: '#66717E',
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  debugMetricValue: {
+    color: '#1E2328',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  debugSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#EEF1F4',
+    paddingTop: 12,
+    gap: 8,
+  },
+  debugSectionTitle: {
+    color: '#1E2328',
+    fontSize: 13,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  debugPickRow: {
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    gap: 4,
+  },
+  debugPickTitle: {
+    color: '#1E2328',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  debugText: {
+    color: '#4A5561',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  debugMutedText: {
+    color: '#66717E',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  debugErrorText: {
+    color: '#B42318',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
   },
   optionCard: {
     flexDirection: 'row',

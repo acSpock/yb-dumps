@@ -279,6 +279,10 @@ test('analysis job endpoint uploads resized assets, runs CPU vision, and cleans 
       assert.equal(startResponse.status, 200);
       assert.equal(started.result.modelVersion, 'cpu-vision-curation-v0.1.0');
       assert.ok(started.result.topPicks.length > 0);
+      assert.equal(started.result.debugTrace?.pipeline, 'cpu-only');
+      assert.equal(started.result.debugTrace?.cpu?.uploadedAssetCount, 1);
+      assert.equal(started.result.debugTrace?.gpu?.status, 'not_configured');
+      assert.ok((started.result.debugTrace?.cpu?.preselectTopPicks?.length ?? 0) > 0);
 
       const resultResponse = await fetch(`${baseUrl}/analysis/jobs/${job.jobId}/result`);
       const result = await resultResponse.json() as RankingResult;
@@ -377,6 +381,10 @@ test('analysis job optionally refines capped CPU candidates with GPU features', 
       assert.ok((gpuAssetBatchSizes[0] ?? 0) <= 2);
       assert.equal(started.result.modelVersion, 'gpu-vision-curation-v0.1.0');
       assert.ok(started.result.photoScores.some((score) => score.sceneLabels.includes('gpu_refined')));
+      assert.equal(started.result.debugTrace?.pipeline, 'cpu-gpu');
+      assert.equal(started.result.debugTrace?.gpu?.status, 'completed');
+      assert.ok((started.result.debugTrace?.gpu?.candidatePhotoIds?.length ?? 0) > 0);
+      assert.ok((started.result.debugTrace?.gpu?.returnedFeatures?.[0]?.modelLabels ?? []).includes('gpu_refined'));
     });
   } finally {
     await rm(tempDir, { force: true, recursive: true });

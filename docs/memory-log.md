@@ -684,3 +684,29 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
   - opened replacement panel
   - replaced one slide image from candidate pool
   - confirmed workflow message `Replaced a slide image`
+
+## 2026-06-15 - CPU/GPU Analysis Trace
+
+### Product Decisions
+
+- The app needs an inspectable explanation for why photos were picked, especially for near-duplicate complaints.
+- The API should return a structured `debugTrace` with stage-level details instead of relying only on Render or Runpod logs.
+- The visible app copy must be honest about the GPU worker: it currently returns CLIP image embeddings plus pixel-derived quality/color signals, not true object classification.
+
+### Implementation Done
+
+- Added optional `debugTrace` to `RankingResult` in API and mobile types.
+- The metadata/CPU ranker now includes final debug summaries for top picks, duplicate groups, carousel slide composition, input counts, and warnings.
+- Analysis jobs now run an explicit CPU preselect pass before optional GPU enrichment, then attach:
+  - CPU uploaded/analyzed counts
+  - CPU preselect top picks
+  - GPU status, provider, candidate IDs, returned feature count, returned feature summaries, and error state
+  - Final top picks, duplicate groups, carousel slide photo IDs, and warnings
+- Added a collapsible `Analysis trace` panel to the mobile results screen.
+- The trace panel shows CPU preselect, GPU enrichment, final top picks, duplicate examples, and slide composition in terms of exact photo IDs.
+
+### Operational Notes
+
+- Render remains the pipeline owner and final ranker.
+- Runpod remains a stateless enrichment service keyed by `photoId`.
+- GPU completion changes the result pipeline to `cpu-gpu`; GPU failure or missing config still returns CPU-only results.

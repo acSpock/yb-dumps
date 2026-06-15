@@ -130,6 +130,60 @@ export type FeedPreviewCandidate = FeedFitScore & {
   editHint: string;
 };
 
+export type AnalysisDebugPickSummary = {
+  photoId: string;
+  rank?: number;
+  finalScore?: number;
+  reasons?: string[];
+  sceneLabels?: string[];
+  qualityFlags?: string[];
+  modelLabels?: string[];
+  modelSource?: 'metadata' | 'cpu' | 'gpu';
+  modelProvider?: string;
+  aestheticScore?: number;
+  qualityScore?: number;
+};
+
+export type AnalysisDebugTrace = {
+  pipeline: 'metadata-only' | 'cpu-only' | 'cpu-gpu';
+  input: {
+    photoCount: number;
+    feedAssetCount: number;
+  };
+  cpu?: {
+    analyzedAssetCount?: number;
+    uploadedAssetCount?: number;
+    preselectCandidateCount?: number;
+    preselectTopPicks?: AnalysisDebugPickSummary[];
+  };
+  gpu?: {
+    enabled: boolean;
+    status: 'not_configured' | 'skipped' | 'completed' | 'failed';
+    provider?: string;
+    candidateLimit?: number;
+    candidateCount?: number;
+    candidatePhotoIds?: string[];
+    returnedFeatureCount?: number;
+    returnedFeatures?: AnalysisDebugPickSummary[];
+    error?: string;
+  };
+  final: {
+    topPicks: AnalysisDebugPickSummary[];
+    duplicateGroups: DuplicateGroup[];
+    carouselSlides: Array<{
+      variationId: string;
+      label: string;
+      slides: Array<{
+        slideId: string;
+        rank: number;
+        template: CarouselSlideTemplate;
+        photoIds: string[];
+      }>;
+    }>;
+    warnings: string[];
+  };
+};
+
 export type FeedImportMode = 'none' | 'instagram' | 'screenshot' | 'recent_posts';
 
 export type FeedImportAsset = {
@@ -212,6 +266,7 @@ export type RankingResult = {
   duplicateGroups: DuplicateGroup[];
   feedPreviewCandidates: FeedPreviewCandidate[];
   warnings: string[];
+  debugTrace?: AnalysisDebugTrace;
 };
 
 export type AnalysisJob = {
