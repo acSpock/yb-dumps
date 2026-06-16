@@ -2337,6 +2337,8 @@ function AnalysisDebugPanel({ result }: { result: RankingResult }) {
                 style={styles.debugText}
               >
                 {slide.label} #{slide.rank} · {templateLabel(slide.template)} · {slide.photoIds.join(', ')}
+                {slide.semanticClusterIds?.length ? ` · clusters ${slide.semanticClusterIds.join(', ')}` : ''}
+                {slide.templateReasons?.length ? ` · ${slide.templateReasons.join(', ')}` : ''}
               </Text>
             ))}
           </View>
@@ -2397,10 +2399,21 @@ function DebugPickRow({ pick }: { pick: AnalysisDebugPickSummary }) {
     ...(pick.modelLabels ?? []),
     ...(pick.qualityFlags ?? []),
   ].slice(0, 8);
+  const semanticTags = (pick.semanticTags ?? [])
+    .slice(0, 5)
+    .map((tag) => `${tag.label} ${percent(tag.score)}`);
+  const templateScores = pick.templateScores
+    ? Object.entries(pick.templateScores)
+      .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 3)
+      .map(([role, score]) => `${role} ${percent(score)}`)
+    : [];
   const scores = [
     pick.finalScore !== undefined ? `final ${percent(pick.finalScore)}` : undefined,
     pick.qualityScore !== undefined ? `quality ${percent(pick.qualityScore)}` : undefined,
     pick.aestheticScore !== undefined ? `aesthetic ${percent(pick.aestheticScore)}` : undefined,
+    pick.semanticClusterId ? `cluster ${pick.semanticClusterId}` : undefined,
   ].filter(Boolean);
 
   return (
@@ -2416,6 +2429,12 @@ function DebugPickRow({ pick }: { pick: AnalysisDebugPickSummary }) {
       ) : null}
       {labels.length ? (
         <Text style={styles.debugMutedText}>{labels.join(', ')}</Text>
+      ) : null}
+      {semanticTags.length ? (
+        <Text style={styles.debugMutedText}>Tags: {semanticTags.join(', ')}</Text>
+      ) : null}
+      {templateScores.length ? (
+        <Text style={styles.debugMutedText}>Template: {templateScores.join(', ')}</Text>
       ) : null}
     </View>
   );

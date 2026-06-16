@@ -235,6 +235,63 @@ test('does not collapse metadata-only lookalikes without CPU evidence', () => {
   assert.equal(result.topPicks.filter((pick) => pick.photoId.startsWith('metadata-building')).length, 2);
 });
 
+test('clusters GPU semantic same-scene candidates and keeps one representative', () => {
+  const result = analyzeTripPhotos(request({
+    photos: [
+      photo({
+        aestheticScore: 0.82,
+        colorProfile: { brightness: 0.58, contrast: 0.68, saturation: 0.62, warmth: 0.76 },
+        embedding: [1, 0, 0],
+        labels: ['place'],
+        photoId: 'yellow-hotel-wide',
+        semanticTags: [
+          { label: 'architecture', score: 0.44, source: 'clip_zero_shot' },
+          { label: 'hotel', score: 0.31, source: 'clip_zero_shot' },
+        ],
+        templateScores: { hero: 0.62, place: 0.58, atmosphere: 0.2 },
+        width: 1800,
+        height: 1200,
+      }),
+      photo({
+        aestheticScore: 0.9,
+        colorProfile: { brightness: 0.57, contrast: 0.66, saturation: 0.61, warmth: 0.74 },
+        embedding: [0.93, 0.367, 0],
+        labels: ['place'],
+        photoId: 'yellow-hotel-angle',
+        semanticTags: [
+          { label: 'architecture', score: 0.42, source: 'clip_zero_shot' },
+          { label: 'hotel', score: 0.29, source: 'clip_zero_shot' },
+        ],
+        templateScores: { hero: 0.66, place: 0.6, atmosphere: 0.2 },
+        width: 1800,
+        height: 1200,
+      }),
+      photo({
+        embedding: [0, 1, 0],
+        labels: ['food'],
+        momentId: 'dinner',
+        photoId: 'dinner-table',
+        semanticTags: [{ label: 'food', score: 0.48, source: 'clip_zero_shot' }],
+        templateScores: { detail: 0.52, food: 0.48 },
+      }),
+    ],
+    options: {
+      topPoolSize: 3,
+    },
+  }));
+  const group = result.duplicateGroups.find((duplicateGroup) =>
+    duplicateGroup.photoIds.includes('yellow-hotel-wide') &&
+      duplicateGroup.photoIds.includes('yellow-hotel-angle'),
+  );
+
+  assert.ok(group);
+  assert.equal(group.duplicateType, 'similar');
+  assert.ok(group.reasonCodes.includes('semantic_cluster'));
+  assert.equal(group.bestPhotoId, 'yellow-hotel-angle');
+  assert.equal(result.topPicks.filter((pick) => pick.photoId.startsWith('yellow-hotel')).length, 1);
+  assert.ok(result.debugTrace?.final.topPicks.some((pick) => pick.semanticClusterId));
+});
+
 test('still returns picks when every candidate is low quality', () => {
   const result = analyzeTripPhotos(request({
     photos: [
@@ -307,6 +364,70 @@ test('composes carousels under the 20-slide Instagram limit and prefers landscap
     assert.ok(sourcePhoto);
     assert.ok(sourcePhoto.width >= sourcePhoto.height);
   }
+});
+
+test('templates prefer semantic role-compatible groups', () => {
+  const photos = [
+    ...Array.from({ length: 10 }, (_, index) => photo({
+      aestheticScore: 0.84 - index * 0.01,
+      embedding: Array.from({ length: 14 }, (_, vectorIndex) => vectorIndex === index ? 1 : 0),
+      height: 1200,
+      labels: ['architecture', 'detail'],
+      momentId: 'city-details',
+      photoId: `detail-place-${index}`,
+      semanticTags: [
+        { label: index % 2 ? 'architecture' : 'detail', score: 0.46, source: 'clip_zero_shot' },
+        { label: 'street', score: 0.22, source: 'clip_zero_shot' },
+      ],
+      templateScores: {
+        atmosphere: 0.46,
+        detail: 0.54,
+        hero: 0.38,
+        place: 0.52,
+      },
+      width: 1800,
+    })),
+    ...Array.from({ length: 4 }, (_, index) => photo({
+      aestheticScore: 0.86 - index * 0.01,
+      embedding: Array.from({ length: 14 }, (_, vectorIndex) => vectorIndex === index + 10 ? 1 : 0),
+      height: 1700,
+      labels: ['people'],
+      momentId: 'friends',
+      photoId: `people-only-${index}`,
+      qualitySignals: { faceCount: 1, sharpness: 0.86, exposure: 0.82 },
+      semanticTags: [{ label: 'selfie', score: 0.55, source: 'clip_zero_shot' }],
+      templateScores: {
+        hero: 0.42,
+        people: 0.72,
+      },
+      width: 1200,
+    })),
+  ];
+  const result = analyzeTripPhotos(request({
+    options: {
+      carouselMaxSlides: 8,
+      topPoolSize: 14,
+      variationCount: 3,
+    },
+    photos,
+  }));
+  const detailGrid = result.carouselVariations
+    .flatMap((variation) => variation.slides)
+    .find((slide) => slide.template === 'detail_grid');
+
+  assert.ok(detailGrid);
+  assert.ok(detailGrid.photoIds.every((photoId) => photoId.startsWith('detail-place')));
+
+  const triptych = result.carouselVariations
+    .flatMap((variation) => variation.slides)
+    .find((slide) => slide.template === 'vertical_triptych');
+
+  assert.ok(triptych);
+  assert.ok(triptych.photoIds.every((photoId) => {
+    const sourcePhoto = photos.find((item) => item.photoId === photoId);
+    assert.ok(sourcePhoto);
+    return sourcePhoto.width >= sourcePhoto.height;
+  }));
 });
 
 test('scores feed fit against palette and subject style', () => {

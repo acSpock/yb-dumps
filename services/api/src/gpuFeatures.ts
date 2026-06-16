@@ -4,6 +4,8 @@ import {
   AnalysisColorProfile,
   AnalysisPhotoInput,
   AnalysisQualitySignals,
+  SemanticTag,
+  TemplateScores,
 } from './analysisContracts.js';
 import { Config } from './config.js';
 
@@ -21,6 +23,8 @@ export type GpuFeature = {
   modelLabels?: string[];
   modelQualitySignals?: AnalysisQualitySignals;
   colorProfile?: AnalysisColorProfile;
+  semanticTags?: SemanticTag[];
+  templateScores?: TemplateScores;
   modelProvider?: string;
   modelVersion?: string;
 };
@@ -64,6 +68,37 @@ function stringList(value: unknown) {
     .filter(Boolean);
 
   return labels.length ? [...new Set(labels)] : undefined;
+}
+
+function semanticTagList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const tags = value
+    .map((item) => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+        return undefined;
+      }
+
+      const source = item as Record<string, unknown>;
+      const label = typeof source.label === 'string' ? source.label.trim().toLowerCase() : '';
+      const score = finiteNumber(source.score);
+      const tagSource = source.source === 'heuristic' ? 'heuristic' : 'clip_zero_shot';
+
+      if (!label || score === undefined) {
+        return undefined;
+      }
+
+      return {
+        label,
+        score,
+        source: tagSource,
+      } satisfies SemanticTag;
+    })
+    .filter((tag): tag is SemanticTag => Boolean(tag));
+
+  return tags.length ? tags : undefined;
 }
 
 function numberRecord<T extends Record<string, number | undefined>>(value: unknown, keys: Array<keyof T>) {
@@ -116,6 +151,8 @@ function normalizeGpuFeature(value: unknown, defaults: {
     ]),
     modelVersion: typeof source.modelVersion === 'string' ? source.modelVersion : defaults.modelVersion,
     photoId,
+    semanticTags: semanticTagList(source.semanticTags),
+    templateScores: numberRecord<TemplateScores>(source.templateScores, ['hero', 'people', 'place', 'detail', 'food', 'atmosphere']),
     visualEmbedding: numericVector(source.visualEmbedding),
   };
 }
@@ -219,6 +256,25 @@ export function mergeGpuFeature(photo: AnalysisPhotoInput, feature: GpuFeature):
       ...feature.modelQualitySignals,
     },
     modelSource: 'gpu',
+    semanticTags: mergeSemanticTags(photo.semanticTags, feature.semanticTags),
+    templateScores: {
+      ...photo.templateScores,
+      ...feature.templateScores,
+    },
     visualEmbedding: feature.visualEmbedding ?? photo.visualEmbedding,
   };
+}
+
+function mergeSemanticTags(existing: SemanticTag[] = [], incoming: SemanticTag[] = []) {
+  const byLabel = new Map<string, SemanticTag>();
+
+  for (const tag of [...existing, ...incoming]) {
+    const current = byLabel.get(tag.label);
+
+    if (!current || tag.score > current.score) {
+      byLabel.set(tag.label, tag);
+    }
+  }
+
+  return [...byLabel.values()].sort((left, right) => right.score - left.score);
 }

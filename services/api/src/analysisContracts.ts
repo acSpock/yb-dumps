@@ -22,6 +22,21 @@ export type AnalysisQualitySignals = {
   contrast?: number;
 };
 
+export type SemanticTag = {
+  label: string;
+  score: number;
+  source: 'clip_zero_shot' | 'heuristic';
+};
+
+export type TemplateScores = {
+  hero?: number;
+  people?: number;
+  place?: number;
+  detail?: number;
+  food?: number;
+  atmosphere?: number;
+};
+
 export type AnalysisPhotoInput = {
   photoId: string;
   projectId?: string;
@@ -42,6 +57,9 @@ export type AnalysisPhotoInput = {
   modelQualitySignals?: AnalysisQualitySignals;
   modelSource?: 'metadata' | 'cpu' | 'gpu';
   modelProvider?: string;
+  semanticTags?: SemanticTag[];
+  templateScores?: TemplateScores;
+  semanticClusterId?: string;
 };
 
 export type FeedProfileAssetInput = {
@@ -54,6 +72,8 @@ export type FeedProfileAssetInput = {
   perceptualHash?: string;
   visualEmbedding?: number[];
   modelLabels?: string[];
+  semanticTags?: SemanticTag[];
+  templateScores?: TemplateScores;
 };
 
 export type FeedProfileInput = {
@@ -85,6 +105,7 @@ export type PhotoScore = {
   sceneLabels: string[];
   qualityFlags: string[];
   faceCount?: number;
+  semanticClusterId?: string;
 };
 
 export type RankedPick = {
@@ -95,6 +116,7 @@ export type RankedPick = {
   reasons: string[];
   momentId?: string;
   duplicateGroupId?: string;
+  semanticClusterId?: string;
   cropHint: CropHint;
   editHint?: string;
   role?: string;
@@ -171,6 +193,9 @@ export type AnalysisDebugPickSummary = {
   modelProvider?: string;
   aestheticScore?: number;
   qualityScore?: number;
+  semanticTags?: SemanticTag[];
+  templateScores?: TemplateScores;
+  semanticClusterId?: string;
 };
 
 export type AnalysisDebugTrace = {
@@ -207,6 +232,8 @@ export type AnalysisDebugTrace = {
         rank: number;
         template: CarouselSlideTemplate;
         photoIds: string[];
+        semanticClusterIds?: string[];
+        templateReasons?: string[];
       }>;
     }>;
     warnings: string[];

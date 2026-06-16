@@ -134,7 +134,7 @@ Current implementation:
 - `services/api/src/cpuVision.ts` implements `sharp`-based CPU feature extraction.
 - `services/api/src/gpuFeatures.ts` implements the optional provider-neutral GPU feature client.
 - `services/api/src/analysisJobs.ts` implements file-backed MVP analysis jobs.
-- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0`, `cpu-vision-curation-v0.1.0`, and `gpu-vision-curation-v0.1.0`.
+- `services/api/src/modelRanker.ts` implements `heuristic-curation-v0.1.0`, `cpu-vision-curation-v0.1.0`, and `gpu-vision-curation-v0.2.0`.
 - `POST /analysis/rank` accepts metadata, labels, color profiles, optional embeddings, optional quality/aesthetic signals, and optional feed-profile assets.
 - The job flow accepts resized JPEG analysis images and enriches photo inputs with `perceptualHash`, `visualEmbedding`, `modelLabels`, and `modelQualitySignals`.
 - If `GPU_FEATURES_URL` is configured, the job flow runs a preliminary CPU rank, caps candidates, POSTs candidate analysis images to the GPU endpoint, merges returned embeddings/scores, and then runs final ranking.
@@ -159,8 +159,8 @@ Provider recommendation:
 - Current implementation is a Dockerized FastAPI service using PyTorch + Transformers.
 - Default model is `openai/clip-vit-base-patch32`.
 - The Docker build preloads model files with `scripts/download_model.py`; startup/first-request loading can also download weights through `from_pretrained`.
-- The worker currently returns CLIP embeddings plus heuristic image quality/color/aesthetic signals.
-- A dedicated aesthetic/quality head is future work.
+- The worker currently returns CLIP embeddings, CLIP zero-shot semantic tags, template-role scores, and heuristic image quality/color/aesthetic signals.
+- A dedicated aesthetic/quality head and true object detector are future work.
 - Do not host the final ranker/composer in the GPU worker; keep that in `services/api`.
 
 Current limitation:

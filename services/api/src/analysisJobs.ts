@@ -187,6 +187,8 @@ function debugFeatureSummary(feature: GpuFeature): AnalysisDebugPickSummary {
       feature.modelQualitySignals?.sharpness !== undefined ? `sharpness ${roundDebugNumber(feature.modelQualitySignals.sharpness)}` : undefined,
       feature.modelQualitySignals?.exposure !== undefined ? `exposure ${roundDebugNumber(feature.modelQualitySignals.exposure)}` : undefined,
     ].filter((value): value is string => Boolean(value)),
+    semanticTags: feature.semanticTags?.slice(0, 6),
+    templateScores: feature.templateScores,
   };
 }
 

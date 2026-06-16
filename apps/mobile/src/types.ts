@@ -24,6 +24,21 @@ export type FeedbackAction = 'keep' | 'reject' | 'favorite' | 'too_similar' | 'm
 export type CropHint = 'vertical' | 'square' | 'landscape' | 'none';
 export type CarouselSlideTemplate = 'single' | 'vertical_triptych' | 'hero_with_details' | 'detail_grid';
 
+export type SemanticTag = {
+  label: string;
+  score: number;
+  source: 'clip_zero_shot' | 'heuristic';
+};
+
+export type TemplateScores = {
+  hero?: number;
+  people?: number;
+  place?: number;
+  detail?: number;
+  food?: number;
+  atmosphere?: number;
+};
+
 export type TripMoment = {
   momentId: string;
   label: string;
@@ -56,6 +71,7 @@ export type PhotoScore = {
   sceneLabels: string[];
   qualityFlags: string[];
   faceCount?: number;
+  semanticClusterId?: string;
 };
 
 export type RankedPick = {
@@ -66,6 +82,7 @@ export type RankedPick = {
   reasons: string[];
   momentId?: string;
   duplicateGroupId?: string;
+  semanticClusterId?: string;
   cropHint: CropHint;
   editHint?: string;
   role?: string;
@@ -142,6 +159,9 @@ export type AnalysisDebugPickSummary = {
   modelProvider?: string;
   aestheticScore?: number;
   qualityScore?: number;
+  semanticTags?: SemanticTag[];
+  templateScores?: TemplateScores;
+  semanticClusterId?: string;
 };
 
 export type AnalysisDebugTrace = {
@@ -178,6 +198,8 @@ export type AnalysisDebugTrace = {
         rank: number;
         template: CarouselSlideTemplate;
         photoIds: string[];
+        semanticClusterIds?: string[];
+        templateReasons?: string[];
       }>;
     }>;
     warnings: string[];

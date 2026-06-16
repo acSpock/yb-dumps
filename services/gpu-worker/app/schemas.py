@@ -37,6 +37,21 @@ class QualitySignals(ApiModel):
     contrast: float
 
 
+class SemanticTag(ApiModel):
+    label: str
+    score: float
+    source: str
+
+
+class TemplateScores(ApiModel):
+    hero: float
+    people: float
+    place: float
+    detail: float
+    food: float
+    atmosphere: float
+
+
 class FeatureOutput(ApiModel):
     photo_id: str = Field(alias="photoId")
     embedding: list[float]
@@ -44,6 +59,8 @@ class FeatureOutput(ApiModel):
     model_labels: list[str] = Field(alias="modelLabels")
     model_quality_signals: QualitySignals = Field(alias="modelQualitySignals")
     color_profile: ColorProfile = Field(alias="colorProfile")
+    semantic_tags: list[SemanticTag] = Field(default_factory=list, alias="semanticTags")
+    template_scores: TemplateScores = Field(alias="templateScores")
 
 
 class FeatureResponse(ApiModel):

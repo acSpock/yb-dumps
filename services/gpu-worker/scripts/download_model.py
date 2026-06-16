@@ -1,6 +1,6 @@
 import os
 
-from transformers import CLIPImageProcessor, CLIPModel
+from transformers import CLIPImageProcessor, CLIPModel, CLIPTokenizer
 
 
 def main() -> None:
@@ -9,6 +9,7 @@ def main() -> None:
 
     print(f"Downloading model_id={model_id} cache_dir={cache_dir}", flush=True)
     CLIPImageProcessor.from_pretrained(model_id, cache_dir=cache_dir)
+    CLIPTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
     CLIPModel.from_pretrained(model_id, cache_dir=cache_dir)
     print("Model download complete", flush=True)
 

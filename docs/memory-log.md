@@ -710,3 +710,35 @@ This file is the handoff source for future Trip Picks threads. Keep it current w
 - Render remains the pipeline owner and final ranker.
 - Runpod remains a stateless enrichment service keyed by `photoId`.
 - GPU completion changes the result pipeline to `cpu-gpu`; GPU failure or missing config still returns CPU-only results.
+
+## 2026-06-15 - Carousel Quality Semantic Upgrade
+
+### Product Decisions
+
+- The next quality slice is carousel-first, not feed-first.
+- GPU remains candidate-capped; CPU still analyzes every uploaded resized image.
+- CLIP zero-shot tags are used as lightweight scene/object understanding, but they are not true object detection.
+- Render keeps ownership of clustering, final ranking, and carousel template composition.
+
+### Implementation Done
+
+- Extended the GPU worker to score fixed CLIP text prompts for scenes such as people, group, beach, city, architecture, landmark, food, detail, sunset, night, street, water, and interior.
+- GPU feature responses now include:
+  - `semanticTags`
+  - `templateScores`
+  - existing embedding, quality, aesthetic, labels, and color fields
+- The API merges semantic tags/template scores into photo inputs and assigns `semanticClusterId` for GPU candidates whose neural embeddings, semantic tags, and palette are similar.
+- Duplicate grouping can now report `semantic_cluster` for visually similar same-scene variants.
+- Top-pick selection uses semantic clusters as visual identity keys, reducing repeated same-scene picks.
+- Template composition now scores photo groups by template roles:
+  - vertical triptych prefers landscape/square detail/place/atmosphere candidates
+  - hero-with-details prefers one hero plus supporting details/place/food/atmosphere
+  - detail grid avoids close people-only photos unless they also fit detail/atmosphere
+- The mobile `Analysis trace` panel now shows semantic tags, template-role scores, semantic cluster IDs, and slide template reasons.
+
+### Validation
+
+- API typecheck passes.
+- Mobile typecheck passes.
+- API test suite passes.
+- GPU worker semantic helper unit tests pass.

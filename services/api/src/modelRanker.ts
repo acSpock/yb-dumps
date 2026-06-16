@@ -14,11 +14,13 @@ import {
   PhotoScore,
   RankedPick,
   RankingResult,
+  SemanticTag,
+  TemplateScores,
 } from './analysisContracts.js';
 
 const HEURISTIC_MODEL_VERSION = 'heuristic-curation-v0.1.0';
 const CPU_VISION_MODEL_VERSION = 'cpu-vision-curation-v0.1.0';
-const GPU_VISION_MODEL_VERSION = 'gpu-vision-curation-v0.1.0';
+const GPU_VISION_MODEL_VERSION = 'gpu-vision-curation-v0.2.0';
 const EMBEDDING_SIZE = 32;
 const DEFAULT_TOP_POOL_SIZE = 50;
 const DEFAULT_CAROUSEL_MAX_SLIDES = 20;
@@ -41,6 +43,9 @@ type PhotoFeature = {
   cropHint: CropHint;
   capturedAtMs?: number;
   duplicateGroupId?: string;
+  semanticClusterId?: string;
+  semanticTags: SemanticTag[];
+  templateScores: Required<TemplateScores>;
   isDuplicateWinner: boolean;
 };
 
@@ -151,7 +156,11 @@ function cropHintFor(orientation: Orientation): CropHint {
 
 function labelsFor(photo: AnalysisPhotoInput, orientation: Orientation) {
   const labels = new Set(
-    [...(photo.labels ?? []), ...(photo.modelLabels ?? [])]
+    [
+      ...(photo.labels ?? []),
+      ...(photo.modelLabels ?? []),
+      ...(photo.semanticTags ?? []).filter((tag) => tag.score >= 0.04).map((tag) => tag.label),
+    ]
       .map((label) => label.trim().toLowerCase())
       .filter(Boolean),
   );
@@ -167,6 +176,76 @@ function labelsFor(photo: AnalysisPhotoInput, orientation: Orientation) {
   }
 
   return [...labels].sort();
+}
+
+function normalizedSemanticTags(tags?: SemanticTag[]) {
+  return (tags ?? [])
+    .map((tag) => ({
+      label: tag.label.trim().toLowerCase(),
+      score: roundScore(tag.score),
+      source: tag.source,
+    }))
+    .filter((tag) => tag.label && tag.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 8);
+}
+
+function semanticTagScore(tags: SemanticTag[], labels: string[], fallback = 0) {
+  const scores = tags
+    .filter((tag) => labels.includes(tag.label))
+    .map((tag) => tag.score);
+
+  return scores.length ? Math.max(...scores) : fallback;
+}
+
+function templateScoresForPhoto(
+  photo: AnalysisPhotoInput,
+  labels: string[],
+  semanticTags: SemanticTag[],
+  faceCount: number,
+): Required<TemplateScores> {
+  const labelSet = new Set(labels);
+  const incoming = photo.templateScores ?? {};
+  const people = Math.max(
+    safeNumber(incoming.people, 0),
+    faceCount > 0 ? 0.82 : 0,
+    semanticTagScore(semanticTags, ['people', 'group', 'selfie', 'outfit'], 0),
+    labelSet.has('people') || labelSet.has('group') ? 0.58 : 0,
+  );
+  const place = Math.max(
+    safeNumber(incoming.place, 0),
+    semanticTagScore(semanticTags, ['architecture', 'beach', 'city', 'hotel', 'interior', 'landmark', 'landscape', 'street', 'transit', 'water'], 0),
+    ['architecture', 'beach', 'city', 'landscape', 'place', 'street', 'water'].some((label) => labelSet.has(label)) ? 0.55 : 0,
+  );
+  const detail = Math.max(
+    safeNumber(incoming.detail, 0),
+    semanticTagScore(semanticTags, ['detail', 'drink', 'food', 'restaurant', 'texture'], 0),
+    ['detail', 'food', 'texture'].some((label) => labelSet.has(label)) ? 0.58 : 0,
+  );
+  const food = Math.max(
+    safeNumber(incoming.food, 0),
+    semanticTagScore(semanticTags, ['drink', 'food', 'restaurant'], 0),
+    ['drink', 'food', 'restaurant'].some((label) => labelSet.has(label)) ? 0.64 : 0,
+  );
+  const atmosphere = Math.max(
+    safeNumber(incoming.atmosphere, 0),
+    semanticTagScore(semanticTags, ['interior', 'landscape', 'night', 'sunset', 'texture', 'water'], 0),
+    ['landscape', 'night', 'sunset', 'warm'].some((label) => labelSet.has(label)) ? 0.5 : 0,
+  );
+  const hero = Math.max(
+    safeNumber(incoming.hero, 0),
+    place * 0.72 + Math.max(people, atmosphere) * 0.28,
+    labelSet.has('landmark') || labelSet.has('sunset') ? 0.72 : 0,
+  );
+
+  return {
+    atmosphere: roundScore(atmosphere),
+    detail: roundScore(detail),
+    food: roundScore(food),
+    hero: roundScore(hero),
+    people: roundScore(people),
+    place: roundScore(place),
+  };
 }
 
 function fallbackEmbedding(photo: AnalysisPhotoInput, labels: string[], colorProfile: Required<AnalysisColorProfile>) {
@@ -285,14 +364,17 @@ function createFeatures(photos: AnalysisPhotoInput[]) {
     const sceneLabels = labelsFor(photo, orientation);
     const colorProfile = normalizedColorProfile(photo.colorProfile);
     const qualitySignals = mergedQualitySignalsFor(photo);
+    const faceCount = qualitySignals.faceCount ?? photo.peopleIds?.length ?? 0;
+    const semanticTags = normalizedSemanticTags(photo.semanticTags);
+    const templateScores = templateScoresForPhoto(photo, sceneLabels, semanticTags, faceCount);
     const qualityScore = scoreQuality(photo, colorProfile, qualitySignals);
     const aestheticScore = scoreAesthetic(photo, colorProfile, qualityScore);
     const momentSize = momentCounts.get(photo.momentId ?? 'moment-unknown') ?? 1;
     const labelRarity = average(sceneLabels.map((label) => 1 / Math.sqrt(labelCounts.get(label) ?? 1)), 0.5);
     const coverageScore = clamp(0.45 + 0.24 / Math.sqrt(momentSize) + 0.31 * labelRarity);
-    const faceCount = qualitySignals.faceCount ?? photo.peopleIds?.length ?? 0;
     const peopleBonus = faceCount > 0 ? 0.035 : 0;
-    const finalScore = clamp(qualityScore * 0.43 + aestheticScore * 0.36 + coverageScore * 0.21 + peopleBonus);
+    const semanticIntentBonus = Math.max(templateScores.hero, templateScores.people, templateScores.place, templateScores.detail) * 0.025;
+    const finalScore = clamp(qualityScore * 0.42 + aestheticScore * 0.35 + coverageScore * 0.2 + peopleBonus + semanticIntentBonus);
     const qualityFlags = qualityFlagsFor(photo, qualityScore, colorProfile, qualitySignals);
 
     return {
@@ -310,6 +392,9 @@ function createFeatures(photos: AnalysisPhotoInput[]) {
       qualityFlags,
       qualityScore,
       sceneLabels,
+      semanticClusterId: photo.semanticClusterId,
+      semanticTags,
+      templateScores,
     };
   });
 }
@@ -360,7 +445,15 @@ function sourceIdentityKey(feature: PhotoFeature) {
 }
 
 function visualIdentityKey(feature: PhotoFeature) {
-  return feature.duplicateGroupId ? `duplicate:${feature.duplicateGroupId}` : sourceIdentityKey(feature);
+  if (feature.duplicateGroupId) {
+    return `duplicate:${feature.duplicateGroupId}`;
+  }
+
+  if (feature.semanticClusterId) {
+    return `semantic:${feature.semanticClusterId}`;
+  }
+
+  return sourceIdentityKey(feature);
 }
 
 function sameSourceAsset(left: PhotoFeature, right: PhotoFeature) {
@@ -413,6 +506,10 @@ function hasModelEmbedding(feature: PhotoFeature) {
   return Boolean(feature.photo.embedding?.length || feature.photo.visualEmbedding?.length);
 }
 
+function hasNeuralEmbedding(feature: PhotoFeature) {
+  return Boolean(feature.photo.embedding?.length);
+}
+
 function labelOverlapScore(left: string[], right: string[]) {
   const leftLabels = new Set(left);
   const rightLabels = new Set(right);
@@ -444,6 +541,55 @@ function sameSceneVariantMatch(
     (similarity >= 0.94 || (hashMatch?.distance !== undefined && hashMatch.distance <= 16));
 }
 
+function semanticOverlapScore(left: PhotoFeature, right: PhotoFeature) {
+  const leftLabels = new Set(left.semanticTags.filter((tag) => tag.score >= 0.05).map((tag) => tag.label));
+  const rightLabels = new Set(right.semanticTags.filter((tag) => tag.score >= 0.05).map((tag) => tag.label));
+  const intersection = [...leftLabels].filter((label) => rightLabels.has(label)).length;
+  const union = new Set([...leftLabels, ...rightLabels]).size;
+
+  return union ? intersection / union : 0;
+}
+
+function semanticClusterMatch(left: PhotoFeature, right: PhotoFeature) {
+  if (!hasNeuralEmbedding(left) || !hasNeuralEmbedding(right)) {
+    return false;
+  }
+
+  if (!left.semanticTags.length || !right.semanticTags.length) {
+    return false;
+  }
+
+  const similarity = cosineSimilarity(left.embedding, right.embedding);
+  const semanticOverlap = semanticOverlapScore(left, right);
+  const paletteSimilarity = colorMatch(left.colorProfile, right.colorProfile);
+
+  return (similarity >= 0.92 && semanticOverlap >= 0.22 && paletteSimilarity >= 0.68) ||
+    (similarity >= 0.955 && semanticOverlap >= 0.12);
+}
+
+function assignSemanticClusters(features: PhotoFeature[]) {
+  const representatives: PhotoFeature[] = [];
+
+  for (const feature of [...features].sort((left, right) => right.finalScore - left.finalScore)) {
+    if (!hasNeuralEmbedding(feature) || !feature.semanticTags.length) {
+      continue;
+    }
+
+    const representative = representatives.find((candidate) => semanticClusterMatch(candidate, feature));
+
+    if (representative?.semanticClusterId) {
+      feature.semanticClusterId = representative.semanticClusterId;
+      feature.photo.semanticClusterId = representative.semanticClusterId;
+      continue;
+    }
+
+    const clusterId = `sem-${representatives.length + 1}`;
+    feature.semanticClusterId = clusterId;
+    feature.photo.semanticClusterId = clusterId;
+    representatives.push(feature);
+  }
+}
+
 function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt: string) {
   const duplicateGroups: DuplicateGroup[] = [];
   const assigned = new Set<string>();
@@ -469,9 +615,14 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
       const exactEmbedding = hasModelEmbeddings && similarity > 0.985;
       const modelSimilarityMatch = hasModelEmbeddings && similarity > 0.975;
       const sceneVariantMatch = sameSceneVariantMatch(feature, candidate, similarity, hashMatch);
+      const semanticMatch = Boolean(
+        feature.semanticClusterId &&
+          candidate.semanticClusterId &&
+          feature.semanticClusterId === candidate.semanticClusterId,
+      );
       const metadataBurstMatch = !hasModelEmbeddings && similarity > 0.91 && sameMoment && closeTime;
 
-      if (sourceAssetMatch || hashMatch?.near || exactEmbedding || modelSimilarityMatch || sceneVariantMatch || metadataBurstMatch) {
+      if (sourceAssetMatch || hashMatch?.near || exactEmbedding || modelSimilarityMatch || sceneVariantMatch || semanticMatch || metadataBurstMatch) {
         group.push(candidate);
       }
     }
@@ -500,6 +651,9 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
       const similarity = cosineSimilarity(feature.embedding, item.embedding);
       return sameSceneVariantMatch(feature, item, similarity, perceptualHashMatch(feature, item));
     });
+    const hasSemanticClusterMatch = group.slice(1).some((item) =>
+      Boolean(feature.semanticClusterId && item.semanticClusterId && feature.semanticClusterId === item.semanticClusterId),
+    );
     const averageHashConfidence = hashMatches.length
       ? average(hashMatches.map((match) => match.confidence), 0.85)
       : undefined;
@@ -509,7 +663,7 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
         ? 'exact'
         : hasNearHashMatch || averageSimilarity > 0.985
           ? 'near'
-          : hasSceneVariantMatch
+          : hasSceneVariantMatch || hasSemanticClusterMatch
             ? 'similar'
           : group.every((item) => areCloseInTime(feature, item, 20_000))
             ? 'burst'
@@ -533,8 +687,9 @@ function detectDuplicates(features: PhotoFeature[], projectId: string, createdAt
         ...(hasSourceAssetMatch ? ['source_asset_match'] : []),
         ...(hasNearHashMatch || hasExactHashMatch ? ['perceptual_hash'] : []),
         ...(hasSceneVariantMatch && !hasNearHashMatch && !hasExactHashMatch ? ['same_scene_variant'] : []),
+        ...(hasSemanticClusterMatch && !hasSceneVariantMatch && !hasNearHashMatch && !hasExactHashMatch ? ['semantic_cluster'] : []),
         ...(duplicateType === 'burst' ? ['time_proximity'] : []),
-        ...(!hasNearHashMatch && !hasExactHashMatch && !hasSceneVariantMatch ? ['visual_similarity'] : []),
+        ...(!hasNearHashMatch && !hasExactHashMatch && !hasSceneVariantMatch && !hasSemanticClusterMatch ? ['visual_similarity'] : []),
       ],
       representativePhotoId: feature.photo.photoId,
     });
@@ -629,6 +784,16 @@ function reasonsFor(feature: PhotoFeature) {
     reasons.push(feature.faceCount >= 3 ? 'good group energy' : 'strong people moment');
   }
 
+  if (feature.semanticClusterId) {
+    reasons.push('best frame from semantic cluster');
+  }
+
+  if (Math.max(feature.templateScores.detail, feature.templateScores.food) >= 0.5) {
+    reasons.push('strong detail/template role');
+  } else if (feature.templateScores.place >= 0.5) {
+    reasons.push('strong place-setting role');
+  }
+
   if (feature.duplicateGroupId) {
     reasons.push('best frame from a similar burst');
   }
@@ -662,9 +827,17 @@ function rankedPicksFor(features: PhotoFeature[]) {
     photoId: feature.photo.photoId,
     rank: index + 1,
     reasons: reasonsFor(feature),
-    role: feature.faceCount > 0 ? 'people' : feature.sceneLabels.includes('detail') ? 'detail' : 'scene',
+    semanticClusterId: feature.semanticClusterId,
+    role: primaryTemplateRole(feature),
     set: 'top_pool',
   }));
+}
+
+function primaryTemplateRole(feature: PhotoFeature) {
+  const entries = Object.entries(feature.templateScores)
+    .sort((left, right) => right[1] - left[1]);
+
+  return entries[0]?.[0] ?? (feature.faceCount > 0 ? 'people' : 'scene');
 }
 
 function photoScoresFor(features: PhotoFeature[]) {
@@ -680,6 +853,7 @@ function photoScoresFor(features: PhotoFeature[]) {
       qualityFlags: feature.qualityFlags,
       qualityScore: roundScore(feature.qualityScore),
       sceneLabels: feature.sceneLabels,
+      semanticClusterId: feature.semanticClusterId,
     }));
 }
 
@@ -736,6 +910,7 @@ function poolForStrategy(strategy: VariationStrategy, selectedFeatures: PhotoFea
 
   if (strategy === 'people') {
     return sorted.sort((left, right) =>
+      right.templateScores.people - left.templateScores.people ||
       right.faceCount - left.faceCount ||
       right.finalScore - left.finalScore ||
       compareTime(left, right),
@@ -754,9 +929,9 @@ function poolForStrategy(strategy: VariationStrategy, selectedFeatures: PhotoFea
 }
 
 function atmosphereScore(feature: PhotoFeature) {
-  const detailBonus = feature.sceneLabels.some((label) => ['detail', 'food', 'architecture', 'landscape', 'place'].includes(label)) ? 0.35 : 0;
+  const detailBonus = Math.max(feature.templateScores.detail, feature.templateScores.food, feature.templateScores.place) * 0.35;
   const orientationBonus = feature.orientation === 'landscape' ? 0.18 : feature.orientation === 'square' ? 0.1 : 0;
-  return feature.aestheticScore + detailBonus + orientationBonus;
+  return feature.aestheticScore + detailBonus + feature.templateScores.atmosphere * 0.24 + orientationBonus;
 }
 
 function compareTime(left: PhotoFeature, right: PhotoFeature) {
@@ -827,10 +1002,12 @@ function selectPhotosForTemplate(
 
   for (const group of sameMomentGroups) {
     const available = group.filter((feature) =>
-      !usedPhotoIds.has(feature.photo.photoId) && !usedVisualKeys.has(visualIdentityKey(feature)),
+      !usedPhotoIds.has(feature.photo.photoId) &&
+        !usedVisualKeys.has(visualIdentityKey(feature)) &&
+        templateCandidateAllowed(template, feature),
     );
     const ranked = rankTemplateCandidates(template, available, strategy);
-    const selected = takeUniqueVisualCandidates(ranked, requiredCount);
+    const selected = takeTemplateCandidates(template, ranked, requiredCount);
 
     if (selected.length >= requiredCount) {
       return selected;
@@ -840,23 +1017,53 @@ function selectPhotosForTemplate(
   const globalRanked = rankTemplateCandidates(
     template,
     sameMomentGroups.flat().filter((feature) =>
-      !usedPhotoIds.has(feature.photo.photoId) && !usedVisualKeys.has(visualIdentityKey(feature)),
+      !usedPhotoIds.has(feature.photo.photoId) &&
+        !usedVisualKeys.has(visualIdentityKey(feature)) &&
+        templateCandidateAllowed(template, feature),
     ),
     strategy,
   );
-  const selected = takeUniqueVisualCandidates(globalRanked, requiredCount);
+  const selected = takeTemplateCandidates(template, globalRanked, requiredCount);
 
   return selected.length >= requiredCount ? selected : [];
 }
 
-function takeUniqueVisualCandidates(features: PhotoFeature[], limit: number) {
+function takeTemplateCandidates(template: CarouselSlideTemplate, features: PhotoFeature[], limit: number) {
+  if (template === 'hero_with_details') {
+    return takeHeroWithDetailsCandidates(features, limit);
+  }
+
+  return takeUniqueCompatibleCandidates(features, limit);
+}
+
+function takeHeroWithDetailsCandidates(features: PhotoFeature[], limit: number) {
+  const hero = [...features].sort((left, right) =>
+    heroTemplateScore(right) - heroTemplateScore(left) ||
+      right.finalScore - left.finalScore,
+  )[0];
+
+  if (!hero) {
+    return [];
+  }
+
+  const support = [...features]
+    .filter((feature) => feature.photo.photoId !== hero.photo.photoId)
+    .sort((left, right) =>
+      supportTemplateScore(right) - supportTemplateScore(left) ||
+        right.finalScore - left.finalScore,
+    );
+
+  return takeUniqueCompatibleCandidates([hero, ...support], limit);
+}
+
+function takeUniqueCompatibleCandidates(features: PhotoFeature[], limit: number) {
   const selected: PhotoFeature[] = [];
   const selectedVisualKeys = new Set<string>();
 
   for (const feature of features) {
     const key = visualIdentityKey(feature);
 
-    if (selectedVisualKeys.has(key)) {
+    if (selectedVisualKeys.has(key) || !compatibleWithSelectedTemplatePhotos(feature, selected)) {
       continue;
     }
 
@@ -869,6 +1076,17 @@ function takeUniqueVisualCandidates(features: PhotoFeature[], limit: number) {
   }
 
   return selected;
+}
+
+function compatibleWithSelectedTemplatePhotos(feature: PhotoFeature, selected: PhotoFeature[]) {
+  if (!selected.length) {
+    return true;
+  }
+
+  const averageColorMatch = average(selected.map((item) => colorMatch(feature.colorProfile, item.colorProfile)), 0.7);
+  const averageSemanticOverlap = average(selected.map((item) => semanticOverlapScore(feature, item)), 0);
+
+  return averageColorMatch >= 0.62 || averageSemanticOverlap >= 0.18;
 }
 
 function rankTemplateCandidates(
@@ -885,22 +1103,61 @@ function rankTemplateCandidates(
 
 function templateSuitability(template: CarouselSlideTemplate, feature: PhotoFeature, strategy: VariationStrategy) {
   const landscapePreference = feature.orientation === 'landscape' ? 0.32 : feature.orientation === 'square' ? 0.18 : -0.12;
-  const detailPreference = feature.sceneLabels.some((label) => ['detail', 'food', 'architecture', 'texture'].includes(label)) ? 0.22 : 0;
-  const peoplePreference = feature.faceCount > 0 ? 0.18 : 0;
+  const detailPreference = Math.max(feature.templateScores.detail, feature.templateScores.food);
+  const peoplePreference = Math.max(feature.templateScores.people, feature.faceCount > 0 ? 0.7 : 0);
+  const placePreference = feature.templateScores.place;
+  const atmospherePreference = feature.templateScores.atmosphere;
 
   if (template === 'vertical_triptych') {
-    return feature.finalScore + landscapePreference + (strategy === 'people' ? peoplePreference : 0);
+    return feature.finalScore + landscapePreference + Math.max(detailPreference, placePreference, atmospherePreference) * 0.32 + (strategy === 'people' ? peoplePreference * 0.08 : 0);
   }
 
   if (template === 'hero_with_details') {
-    return feature.finalScore + (feature.orientation !== 'portrait' ? 0.12 : 0) + peoplePreference + detailPreference * 0.5;
+    return feature.finalScore + heroTemplateScore(feature) * 0.28 + supportTemplateScore(feature) * 0.1 + (feature.orientation !== 'portrait' ? 0.08 : 0);
   }
 
   if (template === 'detail_grid') {
-    return feature.finalScore + landscapePreference * 0.7 + detailPreference + (feature.faceCount === 0 ? 0.08 : 0);
+    return feature.finalScore + landscapePreference * 0.5 + supportTemplateScore(feature) * 0.42 + (feature.faceCount === 0 ? 0.08 : -0.08);
   }
 
   return feature.finalScore;
+}
+
+function heroTemplateScore(feature: PhotoFeature) {
+  return Math.max(
+    feature.templateScores.hero,
+    feature.templateScores.people,
+    feature.templateScores.place,
+    feature.templateScores.atmosphere * 0.82,
+  );
+}
+
+function supportTemplateScore(feature: PhotoFeature) {
+  return Math.max(
+    feature.templateScores.detail,
+    feature.templateScores.food,
+    feature.templateScores.place * 0.82,
+    feature.templateScores.atmosphere,
+  );
+}
+
+function templateCandidateAllowed(template: CarouselSlideTemplate, feature: PhotoFeature) {
+  if (template === 'vertical_triptych') {
+    return feature.orientation !== 'portrait' &&
+      Math.max(feature.templateScores.detail, feature.templateScores.place, feature.templateScores.atmosphere) >= 0.34;
+  }
+
+  if (template === 'detail_grid') {
+    const detailSignal = Math.max(feature.templateScores.detail, feature.templateScores.food, feature.templateScores.place, feature.templateScores.atmosphere);
+    const closePeopleOnly = feature.templateScores.people >= 0.68 && Math.max(feature.templateScores.detail, feature.templateScores.atmosphere) < 0.42;
+    return detailSignal >= 0.34 && !closePeopleOnly;
+  }
+
+  if (template === 'hero_with_details') {
+    return Math.max(heroTemplateScore(feature), supportTemplateScore(feature)) >= 0.32;
+  }
+
+  return true;
 }
 
 function fillSingleSlides(
@@ -989,6 +1246,30 @@ function noteForTemplate(template: CarouselSlideTemplate) {
   }
 
   return 'Single-photo slide for a clean carousel beat.';
+}
+
+function templateReasonsForSlide(template: CarouselSlideTemplate, features: PhotoFeature[]) {
+  const clusters = new Set(features.map((feature) => feature.semanticClusterId).filter(Boolean));
+  const reasons: string[] = [];
+
+  if (template === 'vertical_triptych') {
+    reasons.push('landscape/square editorial stack');
+    reasons.push('detail/place/atmosphere role fit');
+  } else if (template === 'hero_with_details') {
+    reasons.push('hero plus supporting details');
+    reasons.push('role-balanced grouping');
+  } else if (template === 'detail_grid') {
+    reasons.push('detail/food/place grid');
+    reasons.push('close people avoided');
+  } else {
+    reasons.push('strong single-photo candidate');
+  }
+
+  if (clusters.size) {
+    reasons.push(`${clusters.size} semantic ${clusters.size === 1 ? 'cluster' : 'clusters'}`);
+  }
+
+  return reasons;
 }
 
 function titleForStrategy(strategy: VariationStrategy, title: string) {
@@ -1328,6 +1609,9 @@ function debugPickFor(
     rank: pick.rank,
     reasons: pick.reasons,
     sceneLabels: feature?.sceneLabels.slice(0, 8),
+    semanticClusterId: feature?.semanticClusterId,
+    semanticTags: feature?.semanticTags.slice(0, 6),
+    templateScores: feature?.templateScores,
   };
 }
 
@@ -1349,8 +1633,12 @@ function finalDebugTrace(input: {
         slides: variation.slides.map((slide) => ({
           photoIds: slide.photoIds,
           rank: slide.rank,
+          semanticClusterIds: [...new Set(slide.photoIds
+            .map((photoId) => featureByPhotoId.get(photoId)?.semanticClusterId)
+            .filter((clusterId): clusterId is string => Boolean(clusterId)))],
           slideId: slide.slideId,
           template: slide.template,
+          templateReasons: templateReasonsForSlide(slide.template, slide.photoIds.map((photoId) => featureByPhotoId.get(photoId)).filter((feature): feature is PhotoFeature => Boolean(feature))),
         })),
         variationId: variation.variationId,
       })),
@@ -1374,6 +1662,7 @@ export function analyzeTripPhotos(request: AnalysisRankRequest): RankingResult {
   const carouselMaxSlides = Math.min(Math.max(request.options?.carouselMaxSlides ?? DEFAULT_CAROUSEL_MAX_SLIDES, 1), 20);
   const variationCount = Math.min(Math.max(request.options?.variationCount ?? DEFAULT_VARIATION_COUNT, 1), 3);
   const features = createFeatures(request.photos);
+  assignSemanticClusters(features);
   const duplicateGroups = detectDuplicates(features, request.projectId, generatedAt);
   const selectedFeatures = selectDiverseFeatures(features, topPoolSize);
   const feedProfile = buildFeedProfile(request.feedProfile);

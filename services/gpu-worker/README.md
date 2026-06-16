@@ -13,9 +13,11 @@ If the API has no `GPU_FEATURES_URL`, the product continues to run CPU-only.
 - Default model: `openai/clip-vit-base-patch32`.
 - CUDA automatically when available, CPU otherwise.
 - CLIP image embeddings for each candidate image.
+- CLIP zero-shot semantic tags for scene/template understanding.
 - Heuristic quality/color/aesthetic signals from pixel stats.
 
 The aesthetic score is not a trained NIMA-style aesthetic head yet. It is a useful bridge score until we add a dedicated aesthetic model.
+The zero-shot tags are lightweight CLIP image-text scores, not true object detection.
 
 ## Model Download Behavior
 
@@ -142,13 +144,13 @@ Body:
 ```json
 {
   "modelProvider": "trip-picks-gpu-worker",
-  "modelVersion": "openai--clip-vit-base-patch32-image-embedding-v0.1.0",
+  "modelVersion": "openai--clip-vit-base-patch32-image-embedding-zero-shot-v0.2.0",
   "features": [
     {
       "photoId": "photo-1",
       "embedding": [0.01, 0.02],
       "aestheticScore": 0.88,
-      "modelLabels": ["landscape", "neural_embedding", "warm"],
+      "modelLabels": ["architecture", "landscape", "neural_embedding", "warm"],
       "modelQualitySignals": {
         "sharpness": 0.91,
         "exposure": 0.84,
@@ -161,6 +163,18 @@ Body:
         "contrast": 0.61,
         "saturation": 0.55,
         "warmth": 0.63
+      },
+      "semanticTags": [
+        { "label": "architecture", "score": 0.42, "source": "clip_zero_shot" },
+        { "label": "street", "score": 0.21, "source": "clip_zero_shot" }
+      ],
+      "templateScores": {
+        "hero": 0.48,
+        "people": 0.05,
+        "place": 0.42,
+        "detail": 0.12,
+        "food": 0.02,
+        "atmosphere": 0.2
       }
     }
   ]

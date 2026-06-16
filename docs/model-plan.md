@@ -167,7 +167,7 @@ There are now three model versions:
 
 - `heuristic-curation-v0.1.0` for metadata-only `/analysis/rank`.
 - `cpu-vision-curation-v0.1.0` when resized image uploads produce CPU pixel features.
-- `gpu-vision-curation-v0.1.0` when an optional GPU endpoint returns features for CPU-selected candidates.
+- `gpu-vision-curation-v0.2.0` when an optional GPU endpoint returns embeddings plus zero-shot semantic/template features for CPU-selected candidates.
 
 The CPU path is not a trained neural model yet. It is a cheaper first step that feeds better real-image features into the same ranking/composition layer:
 
@@ -187,11 +187,11 @@ The GPU path is an optional second stage:
 - CPU analyzes every uploaded analysis image.
 - The API runs a preliminary CPU rank and candidate cap.
 - Only the strongest candidates with uploaded assets are sent to `GPU_FEATURES_URL`.
-- Returned embeddings, aesthetic scores, labels, and quality signals are merged back into the final ranking input.
+- Returned embeddings, zero-shot semantic tags, template-role scores, aesthetic scores, labels, and quality signals are merged back into the final ranking input.
 - GPU failure falls back to CPU results rather than failing the trip.
 - `services/gpu-worker` now contains a Dockerized FastAPI/PyTorch/Transformers worker.
 - The worker downloads `GPU_MODEL_ID` during Docker build by default, and can also load/download at startup or first request.
-- The first worker returns CLIP embeddings plus heuristic quality/color/aesthetic signals. A trained aesthetic head remains future work.
+- The worker returns CLIP embeddings, CLIP zero-shot semantic tags, template-role scores, and heuristic quality/color/aesthetic signals. A trained aesthetic head and true object detector remain future work.
 
 GPU env controls:
 
@@ -206,5 +206,6 @@ Next model step:
 - Add an async worker/queue instead of synchronous `start`.
 - Deploy `services/gpu-worker` to Modal, Runpod, or another GPU HTTPS endpoint and set `GPU_FEATURES_URL` on Render.
 - Add a NIMA-style quality/aesthetic head behind the existing GPU feature contract.
+- Add a true detector/face-quality model if zero-shot tags are not enough for crop safety and object-level template decisions.
 - Add CPU feed-image analysis for imported grid screenshots/recent posts.
 - Keep `/analysis/rank` as the composition/ranking layer so the mobile app contract stays stable.

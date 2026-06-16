@@ -9,6 +9,7 @@ from app.config import read_settings
 from app.image_features import compute_image_stats, decode_image
 from app.model_runtime import ClipRuntime
 from app.schemas import FeatureOutput, FeatureRequest, FeatureResponse, HealthResponse
+from app.semantic_tags import SEMANTIC_PROMPTS, template_scores_for, top_semantic_tags
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -84,14 +85,37 @@ def features(request: FeatureRequest) -> FeatureResponse:
         stats_by_photo_id[asset.photo_id] = compute_image_stats(image)
 
     embeddings = runtime.embed_images(images, settings.batch_size) if images else []
+    zero_shot_scores: list[list[float]] = []
+
+    if embeddings:
+        try:
+            zero_shot_scores = runtime.zero_shot_scores(
+                embeddings,
+                [prompt.prompt for prompt in SEMANTIC_PROMPTS],
+            )
+        except Exception:
+            logger.exception(
+                "zero-shot scoring failed job_id=%s project_id=%s asset_count=%s",
+                request.job_id,
+                request.project_id,
+                len(request.assets),
+            )
+
     outputs: list[FeatureOutput] = []
 
-    for asset, embedding in zip(request.assets, embeddings, strict=True):
+    for index, (asset, embedding) in enumerate(zip(request.assets, embeddings, strict=True)):
         stats = stats_by_photo_id[asset.photo_id]
+        label_scores = {
+            prompt.label: zero_shot_scores[index][prompt_index]
+            for prompt_index, prompt in enumerate(SEMANTIC_PROMPTS)
+        } if index < len(zero_shot_scores) else {}
+        semantic_tags = top_semantic_tags(label_scores) if label_scores else []
+        template_scores = template_scores_for(label_scores)
         labels = sorted({
             *(asset.labels or []),
             *(asset.model_labels or []),
             *stats.labels,
+            *[str(tag["label"]) for tag in semantic_tags],
             "neural_embedding",
         })
 
@@ -103,6 +127,8 @@ def features(request: FeatureRequest) -> FeatureResponse:
                 model_labels=labels,
                 model_quality_signals=stats.quality_signals,
                 color_profile=stats.color_profile,
+                semantic_tags=semantic_tags,
+                template_scores=template_scores,
             )
         )
 

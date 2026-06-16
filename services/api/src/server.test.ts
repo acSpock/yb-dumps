@@ -320,6 +320,12 @@ test('analysis job optionally refines capped CPU candidates with GPU features', 
               sharpness: 0.95,
             },
             photoId: asset.photo.photoId,
+            semanticTags: [
+              { label: index % 2 ? 'people' : 'architecture', score: 0.42, source: 'clip_zero_shot' },
+            ],
+            templateScores: index % 2
+              ? { hero: 0.5, people: 0.7 }
+              : { hero: 0.55, place: 0.62, detail: 0.32 },
           }));
         },
       },
@@ -379,12 +385,14 @@ test('analysis job optionally refines capped CPU candidates with GPU features', 
       assert.equal(gpuAssetBatchSizes.length, 1);
       assert.ok((gpuAssetBatchSizes[0] ?? 0) > 0);
       assert.ok((gpuAssetBatchSizes[0] ?? 0) <= 2);
-      assert.equal(started.result.modelVersion, 'gpu-vision-curation-v0.1.0');
+      assert.equal(started.result.modelVersion, 'gpu-vision-curation-v0.2.0');
       assert.ok(started.result.photoScores.some((score) => score.sceneLabels.includes('gpu_refined')));
       assert.equal(started.result.debugTrace?.pipeline, 'cpu-gpu');
       assert.equal(started.result.debugTrace?.gpu?.status, 'completed');
       assert.ok((started.result.debugTrace?.gpu?.candidatePhotoIds?.length ?? 0) > 0);
       assert.ok((started.result.debugTrace?.gpu?.returnedFeatures?.[0]?.modelLabels ?? []).includes('gpu_refined'));
+      assert.ok((started.result.debugTrace?.gpu?.returnedFeatures?.[0]?.semanticTags ?? []).length > 0);
+      assert.ok(started.result.debugTrace?.gpu?.returnedFeatures?.[0]?.templateScores);
     });
   } finally {
     await rm(tempDir, { force: true, recursive: true });

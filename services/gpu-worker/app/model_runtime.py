@@ -5,7 +5,7 @@ import threading
 
 from PIL import Image
 import torch
-from transformers import CLIPImageProcessor, CLIPModel
+from transformers import CLIPImageProcessor, CLIPModel, CLIPTokenizer
 
 from app.config import Settings
 
@@ -49,12 +49,14 @@ class ClipRuntime:
         self.device = _device_for(settings.model_device)
         self.dtype = _dtype_for(settings.model_dtype, self.device)
         self._image_processor: CLIPImageProcessor | None = None
+        self._text_tokenizer: CLIPTokenizer | None = None
         self._model: CLIPModel | None = None
         self._lock = threading.Lock()
+        self._text_feature_cache: dict[tuple[str, ...], torch.Tensor] = {}
 
     @property
     def loaded(self) -> bool:
-        return self._model is not None and self._image_processor is not None
+        return self._model is not None and self._image_processor is not None and self._text_tokenizer is not None
 
     @property
     def provider(self) -> str:
@@ -63,7 +65,7 @@ class ClipRuntime:
     @property
     def version(self) -> str:
         model_slug = self.settings.model_id.replace("/", "--")
-        return f"{model_slug}-image-embedding-v0.1.0"
+        return f"{model_slug}-image-embedding-zero-shot-v0.2.0"
 
     def load(self) -> None:
         if self.loaded:
@@ -81,6 +83,10 @@ class ClipRuntime:
                 self.settings.model_cache_dir,
             )
             self._image_processor = CLIPImageProcessor.from_pretrained(
+                self.settings.model_id,
+                cache_dir=self.settings.model_cache_dir,
+            )
+            self._text_tokenizer = CLIPTokenizer.from_pretrained(
                 self.settings.model_id,
                 cache_dir=self.settings.model_cache_dir,
             )
@@ -117,3 +123,55 @@ class ClipRuntime:
             ])
 
         return embeddings
+
+    def _text_features(self, prompts: list[str]) -> torch.Tensor:
+        self.load()
+
+        if not self._text_tokenizer or not self._model:
+            raise RuntimeError("model failed to load")
+
+        cache_key = tuple(prompts)
+        cached = self._text_feature_cache.get(cache_key)
+
+        if cached is not None:
+            return cached
+
+        inputs = self._text_tokenizer(
+            prompts,
+            padding=True,
+            return_tensors="pt",
+            truncation=True,
+        )
+        inputs = {key: value.to(device=self.device) for key, value in inputs.items()}
+
+        with torch.inference_mode():
+            features = self._model.get_text_features(**inputs)
+            features = torch.nn.functional.normalize(features, p=2, dim=-1)
+
+        self._text_feature_cache[cache_key] = features
+        return features
+
+    def zero_shot_scores(
+        self,
+        image_embeddings: list[list[float]],
+        prompts: list[str],
+    ) -> list[list[float]]:
+        if not image_embeddings:
+            return []
+
+        text_features = self._text_features(prompts)
+        image_features = torch.tensor(
+            image_embeddings,
+            device=self.device,
+            dtype=text_features.dtype,
+        )
+        image_features = torch.nn.functional.normalize(image_features, p=2, dim=-1)
+
+        with torch.inference_mode():
+            logits = image_features @ text_features.T
+            probabilities = torch.softmax(logits * 100.0, dim=-1)
+
+        return [
+            [round(float(value), 6) for value in row]
+            for row in probabilities.detach().cpu().tolist()
+        ]
